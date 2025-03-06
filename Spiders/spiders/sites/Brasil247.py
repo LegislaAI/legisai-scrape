@@ -33,19 +33,33 @@ class Brasil247Spider(scrapy.Spider):
     start_urls = ["https://www.brasil247.com/ultimas-noticias/page/1"]
     INCREMENT = 1
     data = []
+    article_count = 0  # Added counter
+
+    MAX_ARTICLES = 10  # Limit of articles per website
 
     def parse(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing further if limit is reached
+
         for article in response.css(search_terms['article']):
+            if self.article_count >= self.MAX_ARTICLES:
+                break  # Stop iterating if limit is reached
+
             link = article.css(search_terms['link']).get()
             yield Request(f"https://www.brasil247.com{link}", callback=self.parse_article, priority=1)
+
         self.INCREMENT += 1
         next_page = f"{main_url}{self.INCREMENT}"
-        if next_page is not None:
+
+        if self.article_count < self.MAX_ARTICLES:
             yield response.follow(next_page, callback=self.parse)
         else:
-            print("NÃO TEM NEXT BUTTON")
-            
+            print("Reached article limit, stopping scraper.")
+
     def parse_article(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing articles if limit is reached
+
         updated = response.css(search_terms['updated']).get()
         updated = updated.split("T")[0]
         updated = updated[:10]
@@ -54,6 +68,7 @@ class Brasil247Spider(scrapy.Spider):
         content = response.css(search_terms['content']).getall()
         content = BeautifulSoup(" ".join(content), "html.parser").text
         content = content.replace("\n", " ")
+
         if search_limit <= updated <= today:
             item = articleItem(
                 updated=updated,
@@ -63,10 +78,11 @@ class Brasil247Spider(scrapy.Spider):
             )
             yield item
             self.data.append(item)
-        else: 
-            self.crawler.engine.stop()
-            self.upload_data(self)
-            
+            self.article_count += 1  # Increment article count
+
+        if self.article_count >= self.MAX_ARTICLES:
+            self.crawler.engine.close_spider(self, "Reached article limit")
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(Brasil247Spider, cls).from_crawler(crawler, *args, **kwargs)

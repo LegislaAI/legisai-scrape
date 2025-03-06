@@ -29,15 +29,27 @@ class UolSpider(scrapy.Spider):
     name = "Uol"
     allowed_domains = ["economia.uol.com.br"]
     start_urls = ["https://economia.uol.com.br/ultimas/"]
+    INCREMENT = 1
     data = []
+    article_count = 0  # Added counter
+
+    MAX_ARTICLES = 10  # Limit of articles per website
 
     def parse(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing further if limit is reached
+
         for article in response.css(search_terms['article']):
+            if self.article_count >= self.MAX_ARTICLES:
+                break  # Stop iterating if limit is reached
+
             link = article.css(search_terms['link']).get()
-            if link is not None:
-                yield Request(link, callback=self.parse_article, priority=1)
-   
+            yield Request(link, callback=self.parse_article, priority=1)
+
     def parse_article(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing articles if limit is reached
+
         updated = response.css(search_terms['updated']).get()
         updated = updated.split("T")[0]
         updated = datetime.strptime(updated, "%Y-%m-%d")
@@ -54,10 +66,11 @@ class UolSpider(scrapy.Spider):
             )
             yield item
             self.data.append(item)
-        else: 
-            self.crawler.engine.stop()
-            self.upload_data(self)
-            
+            self.article_count += 1  # Increment article count
+
+        if self.article_count >= self.MAX_ARTICLES:
+            self.crawler.engine.close_spider(self, "Reached article limit")
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(UolSpider, cls).from_crawler(crawler, *args, **kwargs)

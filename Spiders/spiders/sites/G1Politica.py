@@ -31,19 +31,33 @@ class G1PoliticaSpider(scrapy.Spider):
     start_urls = ["https://g1.globo.com/politica/"]
     INCREMENT = 1
     data = []
+    article_count = 0  # Added counter
+
+    MAX_ARTICLES = 10  # Limit of articles per website
 
     def parse(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing further if limit is reached
+
         for article in response.css(search_terms['article']):
+            if self.article_count >= self.MAX_ARTICLES:
+                break  # Stop iterating if limit is reached
+
             link = article.css(search_terms['link']).get()
             yield Request(link, callback=self.parse_article, priority=1)
+
         self.INCREMENT += 1
         next_page = f"https://g1.globo.com/politica/index/feed/pagina-{self.INCREMENT}.ghtml"
-        if next_page is not None:
+
+        if self.article_count < self.MAX_ARTICLES:
             yield response.follow(next_page, callback=self.parse)
         else:
-            print("NÃO TEM NEXT BUTTON")
-            
+            print("Reached article limit, stopping scraper.")
+
     def parse_article(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing articles if limit is reached
+
         updated = response.css(search_terms['updated']).get()
         updated = updated.split("T")[0]
         updated = datetime.strptime(updated, "%Y-%m-%d")
@@ -51,6 +65,7 @@ class G1PoliticaSpider(scrapy.Spider):
         content = response.css(search_terms['content']).getall()
         content = BeautifulSoup(" ".join(content), "html.parser").text
         content = content.replace("\n", " ")
+
         if search_limit <= updated <= today:
             item = articleItem(
                 updated=updated,
@@ -60,10 +75,11 @@ class G1PoliticaSpider(scrapy.Spider):
             )
             yield item
             self.data.append(item)
-        else:
-            self.crawler.engine.stop()
-            self.upload_data(self)
-            
+            self.article_count += 1  # Increment article count
+
+        if self.article_count >= self.MAX_ARTICLES:
+            self.crawler.engine.close_spider(self, "Reached article limit")
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(G1PoliticaSpider, cls).from_crawler(crawler, *args, **kwargs)

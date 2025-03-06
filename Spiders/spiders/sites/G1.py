@@ -30,19 +30,34 @@ class G1Spider(scrapy.Spider):
     allowed_domains = ["g1.globo.com"]
     start_urls = ["https://g1.globo.com/economia/"]
     INCREMENT = 1
+    data = []
+    article_count = 0  # Added counter
+
+    MAX_ARTICLES = 10  # Limit of articles per website
 
     def parse(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing further if limit is reached
+
         for article in response.css(search_terms['article']):
+            if self.article_count >= self.MAX_ARTICLES:
+                break  # Stop iterating if limit is reached
+
             link = article.css(search_terms['link']).get()
             yield Request(link, callback=self.parse_article, priority=1)
+
         self.INCREMENT += 1
         next_page = f"https://g1.globo.com/economia/index/feed/pagina-{self.INCREMENT}.ghtml"
-        if next_page is not None:
+
+        if self.article_count < self.MAX_ARTICLES:
             yield response.follow(next_page, callback=self.parse)
         else:
-            print("NÃO TEM NEXT BUTTON")
-            
+            print("Reached article limit, stopping scraper.")
+
     def parse_article(self, response):
+        if self.article_count >= self.MAX_ARTICLES:
+            return  # Stop parsing articles if limit is reached
+
         updated = response.css(search_terms['updated']).get()
         updated = updated.split("T")[0]
         updated = datetime.strptime(updated, "%Y-%m-%d")
@@ -59,10 +74,11 @@ class G1Spider(scrapy.Spider):
             )
             yield item
             self.data.append(item)
-        else: 
-            self.crawler.engine.stop()
-            self.upload_data(self)
-            
+            self.article_count += 1  # Increment article count
+
+        if self.article_count >= self.MAX_ARTICLES:
+            self.crawler.engine.close_spider(self, "Reached article limit")
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(G1Spider, cls).from_crawler(crawler, *args, **kwargs)
@@ -77,13 +93,13 @@ class G1Spider(scrapy.Spider):
 
         with open(file_path, "r") as f:
             file_data = json.load(f)
-            
+
         data_dicts = [item.to_dict() for item in self.data]
 
         file_data.extend(data_dicts)
 
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
-            
+
         upload = requests.post(f"{os.environ['API_URL']}{site_id}", json={"news": file_data})
         print("upload: ", upload)
