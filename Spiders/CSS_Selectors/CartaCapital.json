@@ -1,0 +1,8 @@
+{
+  "article": "section.l-list__list a",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "div.s-content__infos span span::text",
+  "title": "section.s-content__heading h1::text",
+  "content": "div.contentOpen"
+}

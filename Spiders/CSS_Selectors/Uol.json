@@ -1,0 +1,8 @@
+{
+  "article": "div.flex-wrap div.thumbnails-item",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "time.date::attr(datetime)",
+  "title": "h1.title::text",
+  "content": "div.jupiter-paragraph-fragment"
+}

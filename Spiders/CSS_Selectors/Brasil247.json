@@ -1,0 +1,8 @@
+{
+  "article": "div.grid article",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "time.article__time::attr(datetime)",
+  "title": "h1.article__headline::text",
+  "content": "div[data-cy=\"articleBody\"]"
+}

@@ -1,0 +1,8 @@
+{
+  "article": "div.feed-post-body",
+  "link": "a.feed-post-link::attr(href)",
+  "next_page": "",
+  "updated": "p.content-publication-data__updated time::attr(datetime)",
+  "title": "h1.content-head__title::text",
+  "content": "article"
+}

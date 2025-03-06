@@ -1,0 +1,8 @@
+{
+  "article": "main.site-main article",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "time.entry-date::attr(datetime)",
+  "title": "h1.entry-title::text",
+  "content": "div.entry-content"
+}

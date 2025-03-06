@@ -1,0 +1,8 @@
+{
+  "article": "ol.u-list-unstyled li.c-headline.c-headline--newslist",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "time.c-more-options__published-date::attr(datetime)",
+  "title": "h1.c-content-head__title::text",
+  "content": "div.c-news__body"
+}

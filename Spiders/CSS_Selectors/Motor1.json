@@ -1,0 +1,8 @@
+{
+  "article": "div.m1-newsfeed_grid article",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "time.date-data::text",
+  "title": "h1.main-article-heading::text",
+  "content": "div.postBody"
+}

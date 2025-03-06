@@ -1,0 +1,8 @@
+{
+  "article": "div.listings-page div.listings-page-article",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "span.article-title__information_date::text",
+  "title": "h1.entry-title::text",
+  "content": "div.article-text-full"
+}
