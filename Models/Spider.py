@@ -96,7 +96,7 @@
                             #    "link": item['link'],
                             #    "users": item['users']
                             # }
-                            # file_path = f"Spiders/Results/{self.name}_{timestamp}.json"
+                            # file_path = f"/home/scrapeops/intersites-scrape/Spiders/Results/{self.name}_{timestamp}.json"
                             # if not os.path.isfile(file_path):
                             #     with open(file_path, "w") as f:
                             #         json.dump([], f)

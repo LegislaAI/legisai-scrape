@@ -20,7 +20,7 @@ today = datetime.strptime(today, "%d/%m/%Y")
 search_limit = date.today() - timedelta(days=1)
 search_limit = datetime.strptime(search_limit.strftime("%d/%m/%Y"), "%d/%m/%Y")
 
-with open("Spiders/CSS_Selectors/ViagemTurismo.json") as f:
+with open("/home/scrapeops/intersites-scrape/Spiders/CSS_Selectors/ViagemTurismo.json") as f:
     search_terms = json.load(f)
 
 main_url = "https://viagemeturismo.abril.com.br/mundo/pagina/"
@@ -91,7 +91,7 @@ class ViagemTurismoSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"Spiders/Results/{self.name}_{timestamp}.json"
+        file_path = f"/home/scrapeops/intersites-scrape/Spiders/Results/{self.name}_{timestamp}.json"
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)

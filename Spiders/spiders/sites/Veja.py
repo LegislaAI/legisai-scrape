@@ -24,7 +24,7 @@
 
 # site_id = "4105fd50-d926-4b6f-8210-2c1b9a9f9435"
 
-# with open("Spiders/CSS_Selectors/Veja.json") as f:
+# with open("/home/scrapeops/intersites-scrape/Spiders/CSS_Selectors/Veja.json") as f:
 #     search_terms = json.load(f)
 
 # main_url = "https://veja.abril.com.br/politica/"
@@ -75,7 +75,7 @@
 #         return spider
 
 #     def upload_data(self, spider):
-#         file_path = f"Spiders/Results/{self.name}_{timestamp}.json"
+#         file_path = f"/home/scrapeops/intersites-scrape/Spiders/Results/{self.name}_{timestamp}.json"
 #         if not os.path.isfile(file_path):
 #             with open(file_path, "w") as f:
 #                 json.dump([], f)
