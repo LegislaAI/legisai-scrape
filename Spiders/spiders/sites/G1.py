@@ -32,27 +32,35 @@ class G1Spider(scrapy.Spider):
     INCREMENT = 1
     data = []
     article_count = 0  # Added counter
+    found_old_articles = False  # Track if we encounter older articles
 
-    MAX_ARTICLES = 10  # Limit of articles per website
+    MAX_ARTICLES = 100  # Limit of articles per website
 
     def parse(self, response):
-        if self.article_count >= self.MAX_ARTICLES:
-            return  # Stop parsing further if limit is reached
+        if self.article_count >= self.MAX_ARTICLES or self.found_old_articles:
+            self.crawler.engine.close_spider(self, "Reached article limit or found older articles without hitting 10.")
+            return  
+
+        articles_in_timeframe = 0  # Track valid articles found in this page
 
         for article in response.css(search_terms['article']):
             if self.article_count >= self.MAX_ARTICLES:
-                break  # Stop iterating if limit is reached
+                break  
 
             link = article.css(search_terms['link']).get()
-            yield Request(link, callback=self.parse_article, priority=1)
+            if link:
+                articles_in_timeframe += 1
+                yield Request(link, callback=self.parse_article, priority=1)
+
+        # If no new articles were found in this request, stop scraping
+        if articles_in_timeframe == 0:
+            self.found_old_articles = True
+            self.crawler.engine.close_spider(self, "Found older articles without reaching 10. Stopping.")
+            return  
 
         self.INCREMENT += 1
         next_page = f"https://g1.globo.com/economia/index/feed/pagina-{self.INCREMENT}.ghtml"
-
-        if self.article_count < self.MAX_ARTICLES:
-            yield response.follow(next_page, callback=self.parse)
-        else:
-            print("Reached article limit, stopping scraper.")
+        yield response.follow(next_page, callback=self.parse)
 
     def parse_article(self, response):
         if self.article_count >= self.MAX_ARTICLES:
@@ -65,6 +73,7 @@ class G1Spider(scrapy.Spider):
         content = response.css(search_terms['content']).getall()
         content = BeautifulSoup(" ".join(content), "html.parser").text
         content = content.replace("\n", " ")
+
         if search_limit <= updated <= today:
             item = articleItem(
                 updated=updated,
@@ -76,8 +85,10 @@ class G1Spider(scrapy.Spider):
             self.data.append(item)
             self.article_count += 1  # Increment article count
 
-        if self.article_count >= self.MAX_ARTICLES:
-            self.crawler.engine.close_spider(self, "Reached article limit")
+        else:
+            # If we find an old article and haven't hit 10, stop scraping
+            self.found_old_articles = True
+            self.crawler.engine.close_spider(self, "Found older articles without reaching 10. Stopping.")
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
