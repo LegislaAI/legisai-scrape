@@ -1,0 +1,8 @@
+{
+  "article": "article.blog-post",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "",
+  "title": "h1.entry-title::text",
+  "content": "div.post-body"
+}

@@ -1,10 +1,13 @@
 import requests
 import json
+import os
 
-file_name = "Spiders/Results/AutoEsporte_1741352288.269919.json"
+file_name = "Spiders/Results/OndeAssistir_1749489255.856638.json"
+site_id = "9b8af8dc-e9ef-41c6-b246-1cd734326081"
+
 
 with open(file_name) as f:
     file_data = json.load(f)
 
-upload = requests.post("https://api.vivadicas.com/news/scrape/ab9a6448-3471-491f-9009-d7ec57daba54", json={"news": file_data})
+upload = requests.post(f"{os.environ['API_URL']}{site_id}", json={"news": file_data})
 print(upload.text)
