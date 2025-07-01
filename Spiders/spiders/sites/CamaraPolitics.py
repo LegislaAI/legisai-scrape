@@ -163,7 +163,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"Spiders/Results/{self.name}_{id}_{year}_{timestamp}.json"
+        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{id}_{year}_{timestamp}.json"
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
