@@ -1,49 +1,58 @@
+from scrapy.signals import spider_closed
+from ...items import otherItem
+from datetime import datetime
+from bs4 import BeautifulSoup
+import requests
 import scrapy
 import json
-from ...items import otherItem
-from scrapy.signals import spider_closed
-from datetime import date, datetime, timedelta
 import os
-from bs4 import BeautifulSoup
 
 now = datetime.now()
 timestamp = datetime.timestamp(now)
 
-id = os.environ['POLITICIAN_ID']
-
 year = os.environ['YEAR']
-
-main_url = f"https://www.camara.leg.br/deputados/{id}?ano={year}"
 
 class CamaraOtherSpider(scrapy.Spider):
     name = "CamaraOther"
     allowed_domains = ["camara.leg.br"]
-    start_urls = [f"https://www.camara.leg.br/deputados/{id}?ano={year}"]
     data = []
 
+    def start_requests(self):
+        # Make the API request here
+        request = requests.get(f"{os.environ['API_URL']}/politician/ids")
+        response_data = request.json()
+        ids = response_data['ids']  # Extract the array from the 'ids' key
+
+        # Generate URLs and create requests
+        for politician_id in ids:
+            url = f"https://www.camara.leg.br/deputados/{politician_id}?ano={year}"
+            yield scrapy.Request(url=url, callback=self.parse, meta={'politician_id': politician_id})
+
     def parse(self, response):
+        politician_id = response.meta['politician_id']   # Get all table rows
+        url = f"https://www.camara.leg.br/deputados/{politician_id}/pessoal-gabinete?ano={year}"
         rows = response.css("section.recursos-deputado ul li").getall()
         parsed_rows = []
-        
+
         for row_html in rows:
             soup = BeautifulSoup(row_html, "html.parser")
-            
+
             # Extract title and info separately for better control
             title_elem = soup.find('h3', class_='beneficio__titulo')
             info_elem = soup.find(['a', 'span'], class_='beneficio__info')
-            
+
             if title_elem and info_elem:
                 title = title_elem.get_text().strip().replace('?', '')
                 info = info_elem.get_text().strip()
-                
+
                 # Clean up whitespace
                 title = ' '.join(title.split())
                 info = ' '.join(info.split())
-                
+
                 # Combine title and info
                 full_text = f"{title} {info}"
                 parsed_rows.append(full_text)
-        
+
         # Initialize all benefit fields with None
         all_benefits = {
             'politicianId': None,
@@ -53,9 +62,10 @@ class CamaraOtherSpider(scrapy.Spider):
             'functionalPropertyUsage': None,
             'housingAssistant': None,
             'trips': None,
-            'diplomaticPassport': None
+            'diplomaticPassport': None,
+            'url': None
         }
-        
+
         # Map the parsed rows to specific benefit fields
         for text in parsed_rows:
             if text.startswith('Pessoal de gabinete') or text.startswith('Pessoal de Gabinete'):
@@ -70,18 +80,19 @@ class CamaraOtherSpider(scrapy.Spider):
                 all_benefits['trips'] = text
             elif text.startswith('Passaporte diplomático'):
                 all_benefits['diplomaticPassport'] = text
-                
-        all_benefits['politicianId'] = id
+
+        all_benefits['politicianId'] = politician_id
         all_benefits['year'] = year
-        
+        all_benefits['url'] = url
+
         # Create a single comprehensive item
         item = otherItem(**all_benefits)
         yield item
         self.data.append(item)
-        
+
         # Close spider AFTER processing all rows
-        self.crawler.engine.close_spider(self, "Todos do gabinete foram coletados.")
-    
+        self.crawler.engine.close_spider(self, "Todas as informações suplementares foram coletadas.")
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(CamaraOtherSpider, cls).from_crawler(crawler, *args, **kwargs)
@@ -89,7 +100,7 @@ class CamaraOtherSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{id}_{timestamp}.json"
+        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
@@ -102,3 +113,6 @@ class CamaraOtherSpider(scrapy.Spider):
 
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
+
+        file_name = requests.post(f"{os.environ['API_URL']}/politician-finance/other", json={"records": file_data})
+        print("upload: ", file_name)

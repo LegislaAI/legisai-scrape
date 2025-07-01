@@ -70,7 +70,6 @@ class CamaraNoticiasSpider(scrapy.Spider):
         updated = updated.split(" ")[0]
         updated = updated.replace("/", "-")
         updated = datetime.strptime(updated, "%d-%m-%Y")
-        print("updated: ",  updated)
         title = response.css(search_terms['title']).get()
         content = response.css(search_terms['content']).getall()
         content = BeautifulSoup(" ".join(content), "html.parser").text
@@ -114,5 +113,5 @@ class CamaraNoticiasSpider(scrapy.Spider):
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
 
-        # upload = requests.post(f"{os.environ['API_URL']}{site_id}", json={"news": file_data})
-        # print("upload: ", upload)
+        upload = requests.post(f"{os.environ['API_URL']}/news/scrape?type=PARLIAMENT", json={"records": file_data})
+        print("upload: ", upload)

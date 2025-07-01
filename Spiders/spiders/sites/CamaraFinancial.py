@@ -1,30 +1,37 @@
+from scrapy.signals import spider_closed
+from ...items import generalItem
+from datetime import datetime
+from bs4 import BeautifulSoup
+import requests
 import scrapy
 import json
-from ...items import generalItem
-from scrapy.signals import spider_closed
-from datetime import date, datetime, timedelta
 import os
-from bs4 import BeautifulSoup
 
 now = datetime.now()
 timestamp = datetime.timestamp(now)
 
-id = os.environ['POLITICIAN_ID']
-
 year = os.environ['YEAR']
-
-main_url = f"https://www.camara.leg.br/deputados/{id}?ano={year}"
 
 class CamaraFinancialSpider(scrapy.Spider):
     name = "CamaraFinancial"
     allowed_domains = ["camara.leg.br"]
-    start_urls = [f"https://www.camara.leg.br/deputados/{id}?ano={year}"]
     data = []
-    
+
+    def start_requests(self):
+        # Make the API request here
+        request = requests.get(f"{os.environ['API_URL']}/politician/ids")
+        response_data = request.json()
+        ids = response_data['ids']  # Extract the array from the 'ids' key
+
+        # Generate URLs and create requests
+        for politician_id in ids:
+            url = f"https://www.camara.leg.br/deputados/{politician_id}?ano={year}"
+            yield scrapy.Request(url=url, callback=self.parse, meta={'politician_id': politician_id})
+
     def parse(self, response):
-            # Get all table rows
+            politician_id = response.meta['politician_id']   # Get all table rows
             rows = response.css("div.gasto__col tbody tr").getall()
-            
+
             # Parse each row and extract text
             parsed_rows = []
             for row_html in rows:
@@ -38,10 +45,10 @@ class CamaraFinancialSpider(scrapy.Spider):
                         'percentage': cells[2].get_text().strip(),
                         'full_text': text
                     })
-            
+
             # Find the split point (second occurrence of "Gasto")
             gasto_indices = [i for i, row in enumerate(parsed_rows) if row['label'] == 'Gasto']
-            
+
             if len(gasto_indices) >= 2:
                 split_index = gasto_indices[1]
                 parliamentary_rows = parsed_rows[:split_index]
@@ -56,14 +63,14 @@ class CamaraFinancialSpider(scrapy.Spider):
                 else:
                     parliamentary_rows = parsed_rows
                     cabinet_rows = []
-            
+
             # Month mapping
             month_map = {
                 'JAN': 'jan', 'FEV': 'feb', 'MAR': 'mar', 'ABR': 'apr',
                 'MAI': 'may', 'JUN': 'jun', 'JUL': 'jul', 'AGO': 'aug',
                 'SET': 'sep', 'OUT': 'oct', 'NOV': 'nov', 'DEZ': 'dec'
             }
-            
+
             # Initialize all fields with None
             all_data = {
                 'politicianId': None,
@@ -73,12 +80,12 @@ class CamaraFinancialSpider(scrapy.Spider):
                 'usedCabinetQuota': None,
                 'unusedCabinetQuota': None
             }
-            
+
             # Initialize all month fields
             for month in ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']:
                 all_data[f"{month}UsedParliamentaryQuota"] = None
                 all_data[f"{month}CabinetQuota"] = None
-            
+
             # Process parliamentary data
             for row in parliamentary_rows:
                 if row['label'] == 'Gasto':
@@ -88,7 +95,7 @@ class CamaraFinancialSpider(scrapy.Spider):
                 elif row['label'] in month_map:
                     month_key = f"{month_map[row['label']]}UsedParliamentaryQuota"
                     all_data[month_key] = row['full_text']
-            
+
             # Process cabinet data
             for row in cabinet_rows:
                 if row['label'] == 'Gasto':
@@ -98,15 +105,15 @@ class CamaraFinancialSpider(scrapy.Spider):
                 elif row['label'] in month_map:
                     month_key = f"{month_map[row['label']]}CabinetQuota"
                     all_data[month_key] = row['full_text']
-            
+
             # Create a single item with all data
-            all_data['politicianId'] = id
+            all_data['politicianId'] = politician_id
             all_data['year'] = year
             item = generalItem(**all_data)
             yield item
             self.data.append(item)
             
-            self.crawler.engine.close_spider(self, "Todos do gabinete foram coletados.")
+            self.crawler.engine.close_spider(self, "Todas as informações financeiras foram coletadas.")
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -115,7 +122,7 @@ class CamaraFinancialSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{id}_{timestamp}.json"
+        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
@@ -128,3 +135,6 @@ class CamaraFinancialSpider(scrapy.Spider):
 
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
+
+        file_name = requests.post(f"{os.environ['API_URL']}/politician-finance/finance", json={"records": f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"})
+        print("upload: ", file_name)

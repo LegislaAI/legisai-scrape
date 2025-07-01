@@ -28,6 +28,7 @@ class cabinetItem(Item):
     role = Field()
     period = Field()
     monthly = Field()
+    url = Field()
     
     def to_dict(self):
         return {
@@ -38,6 +39,7 @@ class cabinetItem(Item):
             'role': self['role'],
             'period': self['period'],
             'monthly': self['monthly'],
+            'url': self['url'],
         }
 
 class generalItem(Item):
@@ -114,6 +116,7 @@ class otherItem(Item):
     housingAssistant = Field()
     trips = Field()
     diplomaticPassport = Field()
+    url = Field()
 
     def to_dict(self):
         return {
@@ -124,7 +127,8 @@ class otherItem(Item):
             'functionalPropertyUsage': self['functionalPropertyUsage'],
             'housingAssistant': self['housingAssistant'],
             'trips': self['trips'],
-            'diplomaticPassport': self['diplomaticPassport']
+            'diplomaticPassport': self['diplomaticPassport'],
+            'url': self['url'],
             }
 
 class politicsItem(Item):

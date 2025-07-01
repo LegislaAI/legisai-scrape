@@ -1,27 +1,35 @@
+from scrapy.signals import spider_closed
+from ...items import roleItem
+from datetime import datetime
+from bs4 import BeautifulSoup
+import requests
 import scrapy
 import json
-from ...items import roleItem
-from scrapy.signals import spider_closed
-from datetime import date, datetime, timedelta
 import os
-from bs4 import BeautifulSoup
 
 now = datetime.now()
 timestamp = datetime.timestamp(now)
 
-id = os.environ['POLITICIAN_ID']
-
 year = os.environ['YEAR']
-
-main_url = f"https://www.camara.leg.br/deputados/{id}?ano={year}"
 
 class CamaraRoleSpider(scrapy.Spider):
     name = "CamaraRole"
     allowed_domains = ["camara.leg.br"]
-    start_urls = [f"https://www.camara.leg.br/deputados/{id}?ano={year}"]
     data = []
 
+    def start_requests(self):
+        # Make the API request here
+        request = requests.get(f"{os.environ['API_URL']}/politician/ids")
+        response_data = request.json()
+        ids = response_data['ids']  # Extract the array from the 'ids' key
+
+        # Generate URLs and create requests
+        for politician_id in ids:
+            url = f"https://www.camara.leg.br/deputados/{politician_id}?ano={year}"
+            yield scrapy.Request(url=url, callback=self.parse, meta={'politician_id': politician_id})
+
     def parse(self, response):
+        politician_id = response.meta['politician_id']   # Get all table rows
         roleData = {
             'politicianId': None,
             'year': None,
@@ -29,7 +37,7 @@ class CamaraRoleSpider(scrapy.Spider):
             'description': None,
             'date': None,
         }
-        
+
         role = response.css('section.cargos-deputado ul.cargos-deputado-container').getall()
         for r in role:
             soup = BeautifulSoup(r, "html.parser")
@@ -39,7 +47,7 @@ class CamaraRoleSpider(scrapy.Spider):
             date = soup.find('span', class_='cargos-deputado__periodo').text
             date = ' '.join(date.split())  # Remove extra whitespace
 
-            roleData['politicianId'] = id
+            roleData['politicianId'] = politician_id
             roleData['year'] = year
             roleData['name'] = name
             roleData['description'] = description
@@ -49,9 +57,9 @@ class CamaraRoleSpider(scrapy.Spider):
             item = roleItem(**roleData)
             yield item
             self.data.append(item)
-        
+
         # Close spider AFTER processing all rows
-        self.crawler.engine.close_spider(self, "Todos do gabinete foram coletados.")
+        self.crawler.engine.close_spider(self, "Todas as informações foram coletadas.")
     
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -60,7 +68,7 @@ class CamaraRoleSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{id}_{timestamp}.json"
+        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
@@ -73,3 +81,6 @@ class CamaraRoleSpider(scrapy.Spider):
 
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
+
+        file_name = requests.post(f"{os.environ['API_URL']}/politician-position", json={"records": file_data})
+        print("upload: ", file_name)

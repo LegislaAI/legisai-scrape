@@ -1,28 +1,35 @@
+from scrapy.signals import spider_closed
+from ...items import politicsItem
+from datetime import datetime
+from bs4 import BeautifulSoup
+import requests
 import scrapy
 import json
-from ...items import politicsItem
-from scrapy.signals import spider_closed
-from datetime import date, datetime, timedelta
 import os
-from bs4 import BeautifulSoup
 
 now = datetime.now()
 timestamp = datetime.timestamp(now)
 
-id = os.environ['POLITICIAN_ID']
-
 year = os.environ['YEAR']
-
-main_url = f"https://www.camara.leg.br/deputados/{id}?ano={year}"
 
 class CamaraPoliticsSpider(scrapy.Spider):
     name = "CamaraPolitics"
     allowed_domains = ["camara.leg.br"]
-    start_urls = [f"https://www.camara.leg.br/deputados/{id}?ano={year}"]
     data = []
 
+    def start_requests(self):
+        # Make the API request here
+        request = requests.get(f"{os.environ['API_URL']}/politician/ids")
+        response_data = request.json()
+        ids = response_data['ids']  # Extract the array from the 'ids' key
+
+        # Generate URLs and create requests
+        for politician_id in ids:
+            url = f"https://www.camara.leg.br/deputados/{politician_id}?ano={year}"
+            yield scrapy.Request(url=url, callback=self.parse, meta={'politician_id': politician_id})
+
     def parse(self, response):
-         # Initialize all benefit fields with None
+        politician_id = response.meta['politician_id']   # Get all table rows
         info = {
             'politicianId': None,
             'year': None,
@@ -43,8 +50,15 @@ class CamaraPoliticsSpider(scrapy.Spider):
             'committeesUnjustifiedAbsences': None,
             'commissions': None
         }
-        
+
         cards = response.css("div.l-cards-atuacao__item").getall()
+        if len(cards) == 0:
+            info['politicianId'] = politician_id
+            info['year'] = year
+            item = politicsItem(**info)
+            yield item
+            self.data.append(item)
+            return self.crawler.engine.close_spider(self, "Político não está em exercício")
 
         card1 = cards[0]
         soup1 = BeautifulSoup(card1, "html.parser")
@@ -61,7 +75,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
             relatedProposalsUrl = relatedProposalsUrl['href']
         relatedProposals = relatedProposals.text.strip()
         relatedProposals = relatedProposals.split("\n")[1]
-        
+
         card2 = cards[1]
         soup2 = BeautifulSoup(card2, "html.parser")
         rollCallVotes = soup2.find('div', class_='atuacao__item')
@@ -89,7 +103,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
                         speechesAudiosUrl = url
         speeches = speeches.text.strip()
         speeches = speeches.split("\n")[1]
-        
+
         presences = response.css("div.presencas__content section ul.presencas__subsection-content").getall()
         plenaryPresences = presences[0]
         plenaryPresencesSoup = BeautifulSoup(plenaryPresences, "html.parser")
@@ -106,7 +120,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
         plenaryUnjustifiedAbsences = plenaryUnjustifiedAbsences.text.strip()
         plenaryUnjustifiedAbsences = plenaryUnjustifiedAbsences.split("\n")[1]
         plenaryUnjustifiedAbsences = plenaryUnjustifiedAbsences.strip()
-        
+
         committeesPresences = presences[1]
         committeesPresencesSoup = BeautifulSoup(committeesPresences, "html.parser")
         committeesPresences = committeesPresencesSoup.findAll('li')
@@ -128,8 +142,8 @@ class CamaraPoliticsSpider(scrapy.Spider):
         commissions = BeautifulSoup(" ".join(commissions.findAll(text=True)), "html.parser").text
         commissions = commissions.replace('\n', '')
         commissions = commissions.strip()
-        
-        info['politicianId'] = id
+
+        info['politicianId'] = politician_id
         info['year'] = year
         info['createdProposals'] = createdProposals
         info['createdProposalsUrl'] = createdProposalsUrl
@@ -148,14 +162,14 @@ class CamaraPoliticsSpider(scrapy.Spider):
         info['committeesJustifiedAbsences'] = committeesJustifiedAbsences
         info['committeesUnjustifiedAbsences'] = committeesUnjustifiedAbsences
         info['commissions'] = commissions
-        
+
         item = politicsItem(**info)
         yield item
         self.data.append(item)
-        
+
         # Close spider AFTER processing all rows
-        self.crawler.engine.close_spider(self, "Todos do gabinete foram coletados.")
-    
+        self.crawler.engine.close_spider(self, "Todas as informações foram coletadas.")
+
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(CamaraPoliticsSpider, cls).from_crawler(crawler, *args, **kwargs)
@@ -163,7 +177,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{id}_{year}_{timestamp}.json"
+        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
@@ -176,3 +190,6 @@ class CamaraPoliticsSpider(scrapy.Spider):
 
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
+
+        file_name = requests.post(f"{os.environ['API_URL']}/politician-profile", json={"records": file_data})
+        print("upload: ", file_name)
