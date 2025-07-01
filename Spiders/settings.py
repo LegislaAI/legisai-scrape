@@ -95,9 +95,6 @@ REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
 TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 FEED_EXPORT_ENCODING = "utf-8"
 
-# SCRAPEOPS_API_KEY = 'b4d91964-2a5f-41cf-90a5-62de6faf0dfa'
-# SCRAPEOPS_API_KEY = '0beda8b5-3c2a-4c06-b838-c29285e22fdb'
-# SCRAPEOPS_API_KEY = '9c5893c3-5262-4a4a-a0b4-160a83d3297f'
 SCRAPEOPS_API_KEY = '161e7443-0646-4f9a-8076-64ad1dab7c97'
 # SCRAPEOPS_PROXY_ENABLED = True
 
@@ -110,14 +107,3 @@ DOWNLOADER_MIDDLEWARES = {
     'scrapy.downloadermiddlewares.retry.RetryMiddleware': None,
     # 'scrapeops_scrapy_proxy_sdk.scrapeops_scrapy_proxy_sdk.ScrapeOpsScrapyProxySdk': 725,
  }
-
-BUCKET="axioon"
-AWS_DEFAULT_REGION="sa-east-1"
-# AWS_ACCESS_KEY_ID=os.environ['AWS_ACCESS_KEY_ID']
-# AWS_SECRET_ACCESS_KEY=os.environ['AWS_SECRET_ACCESS_KEY']
-FILES_STORE = 's3://axioon/'
-FEED_STORAGE_S3_ACL = 'public-read'
-ITEM_PIPELINES = {
-    # 'Axion.pipelines.AxionPipeline': 300,
-    'scrapy.pipelines.files.FilesPipeline': 2  # For files
-}

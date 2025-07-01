@@ -1,8 +1,0 @@
-{
-  "article": "div.bastian-page div.bastian-feed-item",
-  "link": "a.feed-post-link::attr(href)",
-  "next_page": "",
-  "updated": "time::attr(datetime)",
-  "title": "h1.content-head__title::text",
-  "content": "div.no-paywall"
-}

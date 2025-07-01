@@ -1,0 +1,8 @@
+{
+  "row": "tbody tr",
+  "name": "td:nth-child(1)::text",
+  "group": "td:nth-child(2)::text",
+  "role": "td:nth-child(3)::text",
+  "period": "td:nth-child(4)::text",
+  "monthly": "td:nth-child(5) a::attr(href)"
+}

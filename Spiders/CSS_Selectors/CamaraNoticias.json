@@ -1,0 +1,8 @@
+{
+  "article": "li.l-lista-noticias__item",
+  "link": "a::attr(href)",
+  "next_page": "",
+  "updated": "p.g-artigo__data-hora::text",
+  "title": "h1.g-artigo__titulo::text",
+  "content": "div.js-article-read-more"
+}

@@ -1,8 +1,0 @@
-{
-  "article": "main div.max-w-9xl div.px-6",
-  "link": "a::attr(href)",
-  "next_page": "",
-  "updated": "time::attr(datetime)",
-  "title": "h1.text-3xl.font-bold.tracking-tighter.text-wl-neutral-950::text",
-  "content": "article"
-}

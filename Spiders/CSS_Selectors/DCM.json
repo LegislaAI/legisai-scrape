@@ -1,8 +1,0 @@
-{
-  "article": "div.td-block-span4",
-  "link": "a::attr(href)",
-  "next_page": "",
-  "updated": "time.entry-date::attr(datetime)",
-  "title": "h1.entry-title::text",
-  "content": "div.td-post-content p::text"
-}

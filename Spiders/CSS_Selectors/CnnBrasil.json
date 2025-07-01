@@ -1,8 +1,0 @@
-{
-  "article": "ul.home__new li.home__list__item",
-  "link": "a.home__list__tag::attr(href)",
-  "next_page": "",
-  "updated": "time.single-header__time::text",
-  "title": "h1.single-header__title::text",
-  "content": "div.single-content"
-}
