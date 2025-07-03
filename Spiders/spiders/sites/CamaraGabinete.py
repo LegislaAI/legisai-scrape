@@ -53,9 +53,6 @@ class CamaraGabineteSpider(scrapy.Spider):
             yield item
             self.data.append(item)
 
-        # Close spider AFTER processing all rows
-        self.crawler.engine.close_spider(self, "Todos do gabinete foram coletados.")
-
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(CamaraGabineteSpider, cls).from_crawler(crawler, *args, **kwargs)

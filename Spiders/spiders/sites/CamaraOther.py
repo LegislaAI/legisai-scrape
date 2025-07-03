@@ -90,9 +90,6 @@ class CamaraOtherSpider(scrapy.Spider):
         yield item
         self.data.append(item)
 
-        # Close spider AFTER processing all rows
-        self.crawler.engine.close_spider(self, "Todas as informações suplementares foram coletadas.")
-
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
         spider = super(CamaraOtherSpider, cls).from_crawler(crawler, *args, **kwargs)

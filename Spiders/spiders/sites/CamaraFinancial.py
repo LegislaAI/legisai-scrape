@@ -112,8 +112,6 @@ class CamaraFinancialSpider(scrapy.Spider):
             item = generalItem(**all_data)
             yield item
             self.data.append(item)
-            
-            self.crawler.engine.close_spider(self, "Todas as informações financeiras foram coletadas.")
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
