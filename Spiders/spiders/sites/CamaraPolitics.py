@@ -58,7 +58,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
             item = politicsItem(**info)
             yield item
             self.data.append(item)
-            return self.crawler.engine.close_spider(self, "Político não está em exercício")
+            return 
 
         card1 = cards[0]
         soup1 = BeautifulSoup(card1, "html.parser")
@@ -91,9 +91,9 @@ class CamaraPoliticsSpider(scrapy.Spider):
         speechesUrl = speeches.find('a')
         if speechesUrl is not None:
             speechesUrl = speechesUrl['href']
-        aditionalLinks = speeches.find('ul', class_='atuacao__links-adicionais')
-        if aditionalLinks is not None:
-            speechesUrl = aditionalLinks.findAll('a')
+        additionalLinks = speeches.find('ul', class_='atuacao__links-adicionais')
+        if additionalLinks is not None:
+            speechesUrl = additionalLinks.findAll('a')
             speechesUrl = [a.get('href') for a in speechesUrl]
             for url in speechesUrl:
                 if url is not None:
