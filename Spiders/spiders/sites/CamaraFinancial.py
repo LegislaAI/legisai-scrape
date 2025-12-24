@@ -134,5 +134,5 @@ class CamaraFinancialSpider(scrapy.Spider):
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
 
-        file_name = requests.post(f"{os.environ['API_URL']}/politician-finance/finance", json={"records": f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"})
+        file_name = requests.post(f"{os.environ['API_URL']}/politician-finance/finance", json=file_data)
         print("upload: ", file_name)

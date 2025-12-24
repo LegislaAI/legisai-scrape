@@ -111,5 +111,5 @@ class CamaraOtherSpider(scrapy.Spider):
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
 
-        file_name = requests.post(f"{os.environ['API_URL']}/politician-finance/other", json={"records": file_data})
-        print("upload: ", file_name)
+        response = requests.post(f"{os.environ['API_URL']}/politician-finance/other", json=file_data)
+        print("upload: ", response)
