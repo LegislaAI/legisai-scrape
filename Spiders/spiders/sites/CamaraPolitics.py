@@ -19,9 +19,11 @@ class CamaraPoliticsSpider(scrapy.Spider):
 
     def start_requests(self):
         # Make the API request here
+        self.logger.info(f"Fetching politician IDs from {os.environ['API_URL']}/politician/ids")
         request = requests.get(f"{os.environ['API_URL']}/politician/ids")
         response_data = request.json()
         ids = response_data['ids']  # Extract the array from the 'ids' key
+        self.logger.info(f"Successfully fetched {len(ids)} politician IDs")
 
         # Generate URLs and create requests
         for politician_id in ids:
@@ -30,6 +32,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
 
     def parse(self, response):
         politician_id = response.meta['politician_id']   # Get all table rows
+        # self.logger.info(f"Parsing profile for Politician ID: {politician_id}")
         info = {
             'politicianId': None,
             'year': None,
@@ -53,6 +56,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
 
         cards = response.css("div.l-cards-atuacao__item").getall()
         if len(cards) == 0:
+            self.logger.warning(f"No activity cards found for Politician ID: {politician_id}. Saving empty profile.")
             info['politicianId'] = politician_id
             info['year'] = year
             item = politicsItem(**info)
@@ -188,5 +192,9 @@ class CamaraPoliticsSpider(scrapy.Spider):
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
 
-        file_name = requests.post(f"{os.environ['API_URL']}/politician-profile", json={"records": file_data})
-        print("upload: ", file_name)
+        spider.logger.info(f"Uploading {len(file_data)} records to API at {os.environ['API_URL']}/politician-profile")
+        response = requests.post(f"{os.environ['API_URL']}/politician-profile", json={"records": file_data})
+        if response.status_code >= 200 and response.status_code < 300:
+            spider.logger.info(f"Upload successful: {response.status_code} - {response.text}")
+        else:
+            spider.logger.error(f"Upload failed: {response.status_code} - {response.text}")

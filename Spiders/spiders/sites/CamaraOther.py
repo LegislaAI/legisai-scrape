@@ -19,9 +19,11 @@ class CamaraOtherSpider(scrapy.Spider):
 
     def start_requests(self):
         # Make the API request here
+        self.logger.info(f"Fetching politician IDs from {os.environ['API_URL']}/politician/ids")
         request = requests.get(f"{os.environ['API_URL']}/politician/ids")
         response_data = request.json()
         ids = response_data['ids']  # Extract the array from the 'ids' key
+        self.logger.info(f"Successfully fetched {len(ids)} politician IDs")
 
         # Generate URLs and create requests
         for politician_id in ids:
@@ -31,6 +33,7 @@ class CamaraOtherSpider(scrapy.Spider):
     def parse(self, response):
         politician_id = response.meta['politician_id']   # Get all table rows
         url = f"https://www.camara.leg.br/deputados/{politician_id}/pessoal-gabinete?ano={year}"
+        # self.logger.info(f"Parsing other info for Politician ID: {politician_id}")
         rows = response.css("section.recursos-deputado ul li").getall()
         parsed_rows = []
 
@@ -111,5 +114,9 @@ class CamaraOtherSpider(scrapy.Spider):
         with open(file_path, "w") as f:
             json.dump(file_data, f, ensure_ascii=False)
 
+        spider.logger.info(f"Uploading {len(file_data)} records to API at {os.environ['API_URL']}/politician-finance/other")
         response = requests.post(f"{os.environ['API_URL']}/politician-finance/other", json=file_data)
-        print("upload: ", response)
+        if response.status_code >= 200 and response.status_code < 300:
+            spider.logger.info(f"Upload successful: {response.status_code} - {response.text}")
+        else:
+            spider.logger.error(f"Upload failed: {response.status_code} - {response.text}")
