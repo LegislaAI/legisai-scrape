@@ -6,11 +6,15 @@ import requests
 import scrapy
 import json
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 now = datetime.now()
 timestamp = datetime.timestamp(now)
 
-year = os.environ['YEAR']
+# Default to current year if not set
+year = os.environ.get('YEAR', str(datetime.now().year))
 
 class CamaraRoleSpider(scrapy.Spider):
     name = "CamaraRole"
@@ -19,14 +23,26 @@ class CamaraRoleSpider(scrapy.Spider):
 
     def start_requests(self):
         # Make the API request here
-        request = requests.get(f"{os.environ['API_URL']}/politician/ids")
-        response_data = request.json()
-        ids = response_data['ids']  # Extract the array from the 'ids' key
+        api_url = os.environ.get('API_URL')
+        if not api_url:
+            self.logger.error("API_URL not set")
+            return
+            
+        try:
+            request = requests.get(f"{api_url}/politician/ids")
+            if request.status_code != 200:
+                self.logger.error(f"Failed to fetch IDs: {request.status_code}")
+                return
 
-        # Generate URLs and create requests
-        for politician_id in ids:
-            url = f"https://www.camara.leg.br/deputados/{politician_id}?ano={year}"
-            yield scrapy.Request(url=url, callback=self.parse, meta={'politician_id': politician_id})
+            response_data = request.json()
+            ids = response_data.get('ids', [])  # Extract the array from the 'ids' key
+    
+            # Generate URLs and create requests
+            for politician_id in ids:
+                url = f"https://www.camara.leg.br/deputados/{politician_id}?ano={year}"
+                yield scrapy.Request(url=url, callback=self.parse, meta={'politician_id': politician_id})
+        except Exception as e:
+            self.logger.error(f"Error fetching IDs: {str(e)}")
 
     def parse(self, response):
         politician_id = response.meta['politician_id']   # Get all table rows
@@ -65,7 +81,12 @@ class CamaraRoleSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"
+        results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Results")
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+            
+        file_path = os.path.join(results_dir, f"{self.name}_{timestamp}.json")
+        
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
@@ -76,8 +97,20 @@ class CamaraRoleSpider(scrapy.Spider):
         data_dicts = [item.to_dict() for item in self.data]
         file_data.extend(data_dicts)
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding='utf-8') as f:
             json.dump(file_data, f, ensure_ascii=False)
 
-        file_name = requests.post(f"{os.environ['API_URL']}/politician-position", json={"records": file_data})
-        print("upload: ", file_name)
+        api_url = os.environ.get('API_URL')
+        if not api_url:
+            spider.logger.error("API_URL not set")
+            return
+
+        try:
+            spider.logger.info(f"Uploading {len(file_data)} records to {api_url}/politician-position")
+            response = requests.post(f"{api_url}/politician-position", json={"records": file_data})
+            if response.status_code >= 200 and response.status_code < 300:
+                print("upload success: ", response.text)
+            else:
+                spider.logger.error(f"Upload failed: {response.status_code} - {response.text}")
+        except Exception as e:
+            spider.logger.error(f"Error during upload: {str(e)}")

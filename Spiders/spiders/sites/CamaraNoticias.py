@@ -8,6 +8,9 @@ import locale
 import scrapy
 import json
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 
@@ -17,7 +20,15 @@ timestamp = datetime.timestamp(now)
 today = datetime.strptime(date.today().strftime("%d/%m/%Y"), "%d/%m/%Y")
 search_limit = datetime.strptime((date.today() - timedelta(days=1)).strftime("%d/%m/%Y"), "%d/%m/%Y")
 
-with open("/home/scrapeops/legisai-scrape/Spiders/CSS_Selectors/CamaraNoticias.json") as f:
+# Resolving relative path for CSS Selectors
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir))) # Adjusting to reach legisai-scrape root or finding Spiders relative to this file
+# Providing a more robust way to find the JSON file:
+# This file is in Spiders/spiders/sites/CamaraNoticias.py
+# We want Spiders/CSS_Selectors/CamaraNoticias.json
+selectors_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "CSS_Selectors", "CamaraNoticias.json")
+
+with open(selectors_path) as f:
     search_terms = json.load(f)
 
 main_url = "https://www.camara.leg.br/noticias/ultimas?pagina="
@@ -98,7 +109,13 @@ class CamaraNoticiasSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
-        file_path = f"/home/scrapeops/legisai-scrape/Spiders/Results/{self.name}_{timestamp}.json"
+        # Result path: Spiders/Results/
+        results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Results")
+        if not os.path.exists(results_dir):
+            os.makedirs(results_dir)
+            
+        file_path = os.path.join(results_dir, f"{self.name}_{timestamp}.json")
+        
         if not os.path.isfile(file_path):
             with open(file_path, "w") as f:
                 json.dump([], f)
@@ -110,8 +127,20 @@ class CamaraNoticiasSpider(scrapy.Spider):
 
         file_data.extend(data_dicts)
 
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding='utf-8') as f:
             json.dump(file_data, f, ensure_ascii=False)
 
-        upload = requests.post(f"{os.environ['API_URL']}/news/scrape?type=PARLIAMENT", json={"records": file_data})
-        print("upload: ", upload)
+        api_url = os.environ.get('API_URL')
+        if not api_url:
+            spider.logger.error("API_URL environment variable is not set. Skipping upload.")
+            return
+
+        try:
+            spider.logger.info(f"Uploading {len(file_data)} records to {api_url}/news/scrape?type=PARLIAMENT")
+            upload = requests.post(f"{api_url}/news/scrape?type=PARLIAMENT", json={"records": file_data})
+            if upload.status_code >= 200 and upload.status_code < 300:
+                print("upload success: ", upload.text)
+            else:
+                spider.logger.error(f"Upload failed: {upload.status_code} - {upload.text}")
+        except Exception as e:
+            spider.logger.error(f"Error during upload: {str(e)}")
