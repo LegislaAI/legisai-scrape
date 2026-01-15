@@ -19,7 +19,11 @@ year = os.environ.get('YEAR', str(datetime.now().year))
 class CamaraPoliticsSpider(scrapy.Spider):
     name = "CamaraPolitics"
     allowed_domains = ["camara.leg.br"]
-    data = []
+    
+    # Batch configuration
+    BATCH_SIZE = 100
+    batch_data = []
+    all_data = []  # For local JSON backup
 
     def start_requests(self):
         # Make the API request here
@@ -36,7 +40,7 @@ class CamaraPoliticsSpider(scrapy.Spider):
                 return
             response_data = request.json()
             ids = response_data.get('ids', [])  # Safely extract 'ids'
-            self.logger.info(f"Successfully fetched {len(ids)} politician IDs")
+            self.logger.info(f"Successfully fetched {len(ids)} politician IDs to scrape")
     
             # Generate URLs and create requests
             for politician_id in ids:
@@ -76,7 +80,10 @@ class CamaraPoliticsSpider(scrapy.Spider):
             info['year'] = year
             item = politicsItem(**info)
             yield item
-            self.data.append(item)
+            self.batch_data.append(item)
+            self.all_data.append(item)
+            if len(self.batch_data) >= self.BATCH_SIZE:
+                self._upload_batch()
             return 
 
         card1 = cards[0]
@@ -184,7 +191,39 @@ class CamaraPoliticsSpider(scrapy.Spider):
 
         item = politicsItem(**info)
         yield item
-        self.data.append(item)
+        
+        # Add to batch and all_data for local backup
+        self.batch_data.append(item)
+        self.all_data.append(item)
+        
+        # Upload batch if size reached
+        if len(self.batch_data) >= self.BATCH_SIZE:
+            self._upload_batch()
+
+    def _upload_batch(self):
+        """Upload current batch to API"""
+        if not self.batch_data:
+            return
+            
+        api_url = os.environ.get('API_URL')
+        if not api_url:
+            self.logger.error("API_URL not set, cannot upload batch")
+            return
+
+        try:
+            data_dicts = [item.to_dict() for item in self.batch_data]
+            self.logger.info(f"Uploading batch of {len(data_dicts)} records...")
+            
+            response = requests.post(f"{api_url}/politician-profile", json={"records": data_dicts})
+            
+            if response.status_code >= 200 and response.status_code < 300:
+                self.logger.info(f"Batch upload success: {len(data_dicts)} records")
+            else:
+                self.logger.error(f"Batch upload failed: {response.status_code} - {response.text}")
+        except Exception as e:
+            self.logger.error(f"Error during batch upload: {str(e)}")
+        finally:
+            self.batch_data = []  # Clear batch regardless of success/failure
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -193,36 +232,18 @@ class CamaraPoliticsSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
+        # Upload any remaining data in the batch
+        self._upload_batch()
+        
+        # Save local JSON backup
         results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Results")
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
             
         file_path = os.path.join(results_dir, f"{self.name}_{timestamp}.json")
         
-        if not os.path.isfile(file_path):
-            with open(file_path, "w") as f:
-                json.dump([], f)
-
-        with open(file_path, "r") as f:
-            file_data = json.load(f)
-
-        data_dicts = [item.to_dict() for item in self.data]
-        file_data.extend(data_dicts)
-
+        data_dicts = [item.to_dict() for item in self.all_data]
         with open(file_path, "w", encoding='utf-8') as f:
-            json.dump(file_data, f, ensure_ascii=False)
-
-        api_url = os.environ.get('API_URL')
-        if not api_url:
-            spider.logger.error("API_URL not set")
-            return
-
-        spider.logger.info(f"Uploading {len(file_data)} records to API at {api_url}/politician-profile")
-        try:
-            response = requests.post(f"{api_url}/politician-profile", json={"records": file_data})
-            if response.status_code >= 200 and response.status_code < 300:
-                spider.logger.info(f"Upload successful: {response.status_code} - {response.text}")
-            else:
-                spider.logger.error(f"Upload failed: {response.status_code} - {response.text}")
-        except Exception as e:
-            spider.logger.error(f"Error during upload: {str(e)}")
+            json.dump(data_dicts, f, ensure_ascii=False)
+        
+        self.logger.info(f"Saved {len(data_dicts)} records to {file_path}")

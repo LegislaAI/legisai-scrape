@@ -1,3 +1,15 @@
+"""
+DEPRECATED: This spider is obsolete and should not be used.
+
+Issues:
+- Hardcoded Linux paths (/home/scrapeops/...)
+- Does not upload data to API (only saves local JSON)
+- YEAR environment variable required without fallback
+- Replaced by CamaraFinancial which captures financial data including cabinet info
+
+To remove from crontab if present.
+"""
+
 from scrapy.signals import spider_closed
 from ...items import cabinetItem
 from datetime import datetime
