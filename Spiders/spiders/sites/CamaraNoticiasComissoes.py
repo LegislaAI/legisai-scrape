@@ -196,9 +196,17 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         if len(commission_links) == 0:
             self.logger.warning(f"Seletor original '{selector}' não encontrou links. Tentando alternativos...")
             
-            # Logar um trecho do HTML para debug
-            html_sample = response.text[:3000] if len(response.text) > 3000 else response.text
-            self.logger.info(f"Trecho do HTML da página de comissões temporárias (primeiros 3000 chars):\n{html_sample}")
+            # Logar um trecho do HTML para debug (procurar pelo body)
+            html_full = response.text
+            body_start = html_full.find('<body')
+            if body_start > 0:
+                # Logar 5000 chars a partir do body
+                html_sample = html_full[body_start:body_start+5000] if len(html_full) > body_start+5000 else html_full[body_start:]
+                self.logger.info(f"Trecho do HTML (a partir do body, 5000 chars):\n{html_sample}")
+            else:
+                # Se não encontrou body, logar uma parte maior do início
+                html_sample = html_full[:5000] if len(html_full) > 5000 else html_full
+                self.logger.info(f"Trecho do HTML (primeiros 5000 chars, body não encontrado):\n{html_sample}")
             
             # Tentar seletores alternativos mais abrangentes
             alt_selectors = [
@@ -254,6 +262,29 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 except Exception as e:
                     self.logger.debug(f"Erro ao testar seletor '{alt_selector}': {e}")
                     continue
+            
+            # Se ainda não encontrou, tentar XPath como último recurso
+            if len(commission_links) == 0:
+                self.logger.warning("Nenhum seletor CSS funcionou. Tentando XPath...")
+                try:
+                    # XPath para encontrar todos os links que contêm /comissoes/
+                    xpath_links = response.xpath('//a[contains(@href, "/comissoes/") and not(contains(@href, "comissoes-temporarias"))]/@href').getall()
+                    xpath_names = response.xpath('//a[contains(@href, "/comissoes/") and not(contains(@href, "comissoes-temporarias"))]/text()').getall()
+                    
+                    if len(xpath_links) > 0:
+                        self.logger.info(f"XPath encontrou {len(xpath_links)} links potenciais")
+                        # Filtrar e limpar
+                        for i, link in enumerate(xpath_links):
+                            if link and link.strip() not in ['/comissoes/', '/comissoes']:
+                                if link.strip() not in commission_links:
+                                    commission_links.append(link.strip())
+                                    name = xpath_names[i].strip() if i < len(xpath_names) and xpath_names[i] else ''
+                                    commission_names.append(name)
+                        
+                        if len(commission_links) > 0:
+                            self.logger.info(f"XPath encontrou {len(commission_links)} links válidos após filtragem")
+                except Exception as e:
+                    self.logger.error(f"Erro ao usar XPath: {e}")
         
         self.logger.info(f"Encontrados {len(commission_links)} links de comissões temporárias")
         
