@@ -10,6 +10,7 @@ class articleItem(Item):
     updated = Field()
     content = Field()
     link = Field()
+    departmentId = Field()  # Novo campo para comissões
     
     def to_dict(self):
         return {
@@ -17,6 +18,7 @@ class articleItem(Item):
             'title': self['title'],
             'content': self['content'],
             'link': self['link'],
+            'departmentId': self.get('departmentId'),  # Incluir departmentId se existir
         }
         
         
