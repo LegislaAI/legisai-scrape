@@ -19,7 +19,9 @@ now = datetime.now()
 timestamp = datetime.timestamp(now)
 
 today = datetime.strptime(date.today().strftime("%d/%m/%Y"), "%d/%m/%Y")
-search_limit = datetime.strptime((date.today() - timedelta(days=1)).strftime("%d/%m/%Y"), "%d/%m/%Y")
+# Ampliar timerange para 90 dias (comissões não são tão frequentes)
+# Isso permite coletar notícias mais antigas que ainda são relevantes
+search_limit = datetime.strptime((date.today() - timedelta(days=90)).strftime("%d/%m/%Y"), "%d/%m/%Y")
 
 # Resolving relative path for CSS Selectors
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,6 +44,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
     article_count = 0
     found_old_articles = False
     MAX_ARTICLES_PER_COMMISSION = 50
+    old_articles_count = 0  # Contador de artigos antigos consecutivos
+    MAX_OLD_ARTICLES_BEFORE_STOP = 10  # Parar após 10 artigos antigos consecutivos
     
     # Mapeamento de comissões temporárias (ID -> URL de notícias)
     temporary_commissions_map = {}
@@ -414,7 +418,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         
         if articles_in_timeframe == 0:
             self.logger.warning(f"Nenhum artigo encontrado na página: {response.url}")
-            self.found_old_articles = True
+            # Não marcar found_old_articles imediatamente - pode ser que a página esteja vazia
+            # mas ainda há outras páginas com conteúdo
             return
         
         # Tentar próxima página se existir
@@ -557,8 +562,11 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             self.logger.error(f"Erro ao processar conteúdo: {e} - Artigo: {response.url}")
             content = ""
         
-        # Verificar se o artigo está no período válido
+        # Verificar se o artigo está no período válido (90 dias)
         if search_limit <= updated <= today:
+            # Resetar contador de artigos antigos quando encontrar um artigo válido
+            self.old_articles_count = 0
+            
             item = articleItem(
                 updated=updated,
                 title=title,
@@ -569,13 +577,18 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             yield item
             self.data.append(item)
             self.article_count += 1
-            self.logger.info(f"Artigo coletado com sucesso: {title[:50]}... (Total: {self.article_count})")
+            self.logger.info(f"Artigo coletado com sucesso: {title[:50]}... (Data: {updated.strftime('%d/%m/%Y')}, Total: {self.article_count})")
         else:
             if updated < search_limit:
-                self.logger.debug(f"Artigo muito antigo (data: {updated}): {response.url}")
+                self.old_articles_count += 1
+                self.logger.debug(f"Artigo muito antigo (data: {updated.strftime('%d/%m/%Y')}, limite: {search_limit.strftime('%d/%m/%Y')}): {response.url} (Antigos consecutivos: {self.old_articles_count})")
+                
+                # Parar apenas se encontrar muitos artigos antigos consecutivos
+                if self.old_articles_count >= self.MAX_OLD_ARTICLES_BEFORE_STOP:
+                    self.logger.info(f"Encontrados {self.old_articles_count} artigos antigos consecutivos. Parando coleta para esta comissão.")
+                    self.found_old_articles = True
             else:
-                self.logger.debug(f"Artigo no futuro (data: {updated}): {response.url}")
-            self.found_old_articles = True
+                self.logger.debug(f"Artigo no futuro (data: {updated.strftime('%d/%m/%Y')}): {response.url}")
     
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
