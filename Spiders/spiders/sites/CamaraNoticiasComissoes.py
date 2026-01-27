@@ -611,11 +611,80 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         commission_name = response.meta.get('commission_name', '')
         
         # Procurar link para /noticias na página
-        news_link = response.css(search_terms.get('commission_news_link', 'a[href*="/noticias"]::attr(href)')).get()
+        # Primeiro, tentar encontrar links específicos de notícias da comissão
+        # Excluir links genéricos como /noticias (sem mais caminhos)
         
-        # Se não encontrou com CSS, tentar XPath
+        # Tentar seletores mais específicos primeiro
+        news_link = None
+        
+        # Estratégia 1: Procurar links que contenham /noticias mas não sejam apenas /noticias
+        # Excluir links do menu de navegação (geralmente estão em nav, header, ou têm classes específicas)
+        all_news_links = response.xpath('//a[contains(@href, "/noticias")]/@href').getall()
+        
+        # Filtrar links genéricos e do menu
+        valid_news_links = []
+        generic_patterns = [
+            '/noticias',
+            '/noticias/',
+            'https://www.camara.leg.br/noticias',
+            'https://www.camara.leg.br/noticias/',
+            'https://www2.camara.leg.br/noticias',
+            'https://www2.camara.leg.br/noticias/',
+        ]
+        
+        for link in all_news_links:
+            if link:
+                link = link.strip()
+                # Excluir links genéricos
+                is_generic = any(pattern in link for pattern in generic_patterns) and link.count('/') <= 3
+                
+                if not is_generic:
+                    # Verificar se o link parece ser específico da comissão
+                    # Deve ter mais caminhos após /noticias ou ser relativo à comissão
+                    # Links específicos geralmente têm formato: /noticias/123456-titulo ou /comissoes/.../noticias
+                    if '/noticias/' in link or (link.count('/') > 3 and 'comissoes' in link.lower()):
+                        valid_news_links.append(link)
+        
+        if len(valid_news_links) > 0:
+            # Pegar o primeiro link válido
+            news_link = valid_news_links[0]
+            self.logger.info(f"Encontrados {len(valid_news_links)} links de notícias válidos, usando: {news_link}")
+        else:
+            self.logger.debug(f"Nenhum link específico de notícias encontrado. Links genéricos encontrados: {len([l for l in all_news_links if l and l.strip() in generic_patterns])}")
+        
+        # Estratégia 2: Se não encontrou, tentar construir URL baseada na estrutura da comissão
         if not news_link:
-            news_link = response.xpath('//a[contains(@href, "/noticias")]/@href').get()
+            # Para comissões temporárias, a URL de notícias pode seguir um padrão
+            # Ex: /comissoes/comissoes-temporarias/especiais/57a-legislatura/comissao-especial-sobre-X/noticias
+            # Ou pode não existir uma seção específica de notícias
+            
+            # Tentar encontrar um link na área de conteúdo principal (não no menu)
+            main_content_links = response.xpath('//main//a[contains(@href, "/noticias")]/@href | //div[@id="main-content"]//a[contains(@href, "/noticias")]/@href').getall()
+            
+            for link in main_content_links:
+                if link and link.strip() not in ['/noticias', '/noticias/']:
+                    news_link = link.strip()
+                    self.logger.debug(f"Encontrado link de notícias no conteúdo principal: {news_link}")
+                    break
+        
+        # Estratégia 3: Se ainda não encontrou, tentar construir URL baseada no padrão
+        if not news_link:
+            # Para comissões temporárias, pode não haver seção específica de notícias
+            # Mas vamos tentar construir a URL baseada no padrão conhecido
+            # Ex: se a URL da comissão é /comissoes/comissoes-temporarias/especiais/57a-legislatura/comissao-X
+            # A URL de notícias pode ser /comissoes/comissoes-temporarias/especiais/57a-legislatura/comissao-X/noticias
+            
+            if '/comissoes-temporarias/' in commission_url:
+                # Tentar adicionar /noticias ao final da URL da comissão
+                potential_news_url = commission_url.rstrip('/') + '/noticias'
+                self.logger.info(f"Nenhum link específico encontrado. Tentando URL construída: {potential_news_url}")
+                # Usar a URL construída como fallback
+                news_link = potential_news_url
+            else:
+                # Se não conseguir construir, pular esta comissão
+                self.logger.warning(f"Não foi possível encontrar ou construir link de notícias para: {commission_name} ({commission_url})")
+                self.logger.info("Comissões temporárias podem não ter seção específica de notícias. Pulando esta comissão.")
+                return
         
         if news_link:
             # Limpar o link (remover HTML se houver, espaços, etc)
@@ -846,12 +915,44 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             return
         
         # Tentar próxima página se existir
+        next_page = None
+        
+        # Estratégia 1: Procurar por rel="next"
         next_page = response.css('a[rel="next"]::attr(href)').get()
+        
+        # Estratégia 2: Procurar por classes de paginação
         if not next_page:
-            # Tentar outros seletores para próxima página
             next_page = response.css('.pagination a.next::attr(href)').get()
             if not next_page:
-                next_page = response.css('a:contains("Próxima")::attr(href)').get()
+                next_page = response.css('.pagination a[aria-label*="próxima"]::attr(href)').get()
+            if not next_page:
+                next_page = response.css('.pagination a[aria-label*="Próxima"]::attr(href)').get()
+        
+        # Estratégia 3: Procurar por texto "Próxima" ou "Próximo"
+        if not next_page:
+            # XPath para encontrar link com texto contendo "Próxima" ou "Próximo"
+            next_page = response.xpath('//a[contains(text(), "Próxima") or contains(text(), "Próximo")]/@href').get()
+        
+        # Estratégia 4: Para página geral de notícias, pode ter paginação numérica
+        if not next_page and 'camara.leg.br/noticias' in response.url and 'pagina' not in response.url:
+            # Tentar encontrar link para página 2
+            page2_link = response.xpath('//a[contains(@href, "pagina=2") or contains(@href, "pagina=1")]/@href').get()
+            if page2_link:
+                # Se encontrou página 1 ou 2, construir link para próxima página
+                if 'pagina=1' in page2_link:
+                    next_page = page2_link.replace('pagina=1', 'pagina=2')
+                elif 'pagina=2' in page2_link:
+                    next_page = page2_link.replace('pagina=2', 'pagina=3')
+        
+        # Estratégia 5: Verificar se há indicadores de paginação na página
+        if not next_page:
+            # Contar quantos links de paginação existem
+            pagination_links = response.css('.pagination a::attr(href)').getall()
+            if len(pagination_links) > 0:
+                self.logger.debug(f"Encontrados {len(pagination_links)} links de paginação, mas nenhum identificado como 'próxima'")
+                # Pegar o último link (geralmente é o próximo)
+                if len(pagination_links) > 1:
+                    next_page = pagination_links[-1]
         
         if next_page:
             next_url = response.urljoin(next_page)
@@ -861,10 +962,17 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 callback=self.parse_news_list,
                 meta=response.meta,
                 priority=5,
-                errback=self.handle_error
+                errback=self.handle_error,
+                dont_filter=True  # Permitir mesmo se já foi visitada (pode ser página diferente)
             )
         else:
             self.logger.debug("Nenhuma próxima página encontrada")
+            # Logar informações sobre a página para debug
+            pagination_elements = response.css('.pagination, .paginacao, [class*="pagin"]').getall()
+            if len(pagination_elements) > 0:
+                self.logger.debug(f"Elementos de paginação encontrados na página: {len(pagination_elements)}")
+            else:
+                self.logger.debug("Nenhum elemento de paginação encontrado na página")
     
     def handle_error(self, failure):
         """Trata erros nas requisições"""
