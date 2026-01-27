@@ -255,12 +255,23 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                             # Normalizar link (remover espaços, etc)
                             link = link.strip()
                             
-                            # Verificar se é um link válido de comissão
-                            # Deve conter /comissoes/ mas não deve ser a própria página de lista
+                            # Verificar se é um link válido de comissão temporária
+                            # Deve conter /comissoes/ e pode conter comissoes-temporarias
+                            # Mas não deve ser a página de lista principal
+                            
+                            # Verificar se é a página de lista (apenas /comissoes/comissoes-temporarias)
+                            is_list_page = (
+                                link.endswith('/comissoes/comissoes-temporarias') or
+                                link.endswith('/comissoes/comissoes-temporarias/') or
+                                link == '/comissoes/comissoes-temporarias'
+                            )
+                            
                             is_valid = (
                                 '/comissoes/' in link and 
-                                'comissoes-temporarias' not in link and
-                                link not in ['/comissoes/', '/comissoes']
+                                not is_list_page and
+                                link not in ['/comissoes/', '/comissoes'] and
+                                # Deve ser um link específico de comissão (ter mais caminhos após /comissoes/)
+                                len(link.split('/')) > 3
                             )
                             
                             if is_valid:
@@ -296,15 +307,26 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                             link = link.strip()
                             
                             # Verificar se é um link válido de comissão temporária
-                            # Deve conter /comissoes/ mas não deve ser:
-                            # - A página de lista (comissoes-temporarias)
+                            # Deve conter /comissoes/ e pode conter comissoes-temporarias
+                            # Mas não deve ser:
+                            # - A página de lista principal (/comissoes/comissoes-temporarias sem mais nada)
                             # - Links genéricos (/comissoes/, /comissoes)
                             # - Links de outras seções
+                            
+                            # Verificar se é a página de lista (apenas /comissoes/comissoes-temporarias)
+                            is_list_page = (
+                                link.endswith('/comissoes/comissoes-temporarias') or
+                                link.endswith('/comissoes/comissoes-temporarias/') or
+                                link == '/comissoes/comissoes-temporarias'
+                            )
+                            
                             is_valid = (
                                 '/comissoes/' in link and 
-                                'comissoes-temporarias' not in link and
+                                not is_list_page and
                                 link not in ['/comissoes/', '/comissoes', '#', ''] and
-                                not link.startswith('http') or 'camara.leg.br' in link
+                                ('http' not in link or 'camara.leg.br' in link) and
+                                # Deve ser um link específico de comissão (ter mais caminhos após /comissoes/)
+                                len(link.split('/')) > 3
                             )
                             
                             if is_valid:
@@ -331,8 +353,18 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         self.logger.info(f"Encontrados {len(commission_links)} links de comissões temporárias")
         
         for i, link in enumerate(commission_links):
-            if link and link.startswith('/'):
-                full_url = f"https://www2.camara.leg.br{link}"
+            if link:
+                # Normalizar URL
+                if link.startswith('/'):
+                    # Link relativo - adicionar domínio
+                    full_url = f"https://www2.camara.leg.br{link}"
+                elif link.startswith('http'):
+                    # URL completa - usar diretamente
+                    full_url = link
+                else:
+                    # Link relativo sem barra inicial - adicionar domínio e barra
+                    full_url = f"https://www2.camara.leg.br/{link}"
+                
                 commission_name = commission_names[i] if i < len(commission_names) else ''
                 
                 # Tentar encontrar department_id pelo nome
@@ -346,6 +378,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                             if name_key in key or key in name_key:
                                 dept_id = d_id
                                 break
+                
+                self.logger.debug(f"Processando comissão temporária: {full_url} (Nome: {commission_name}, ID: {dept_id})")
                 
                 # Navegar até a página da comissão para encontrar link de notícias
                 yield Request(
