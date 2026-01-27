@@ -55,84 +55,160 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
     def start_requests(self):
         """
         Inicia o processo de scraping:
-        1. Se há comissões temporárias, primeiro mapeia suas URLs
-        2. Depois processa todas as comissões (permanentes e temporárias)
+        1. Busca comissões da API usando requests (não Scrapy)
+        2. Se há comissões temporárias, primeiro mapeia suas URLs
+        3. Depois processa todas as comissões (permanentes e temporárias)
         """
-        # Primeiro, buscar comissões temporárias se necessário
+        api_url = os.environ.get('API_URL', 'http://localhost:3333')
+        
+        # Buscar comissões da API usando requests (não Scrapy)
+        try:
+            if self.department_ids:
+                # Se IDs específicos foram fornecidos, buscar cada um
+                for dept_id in self.department_ids:
+                    dept_url = f"{api_url}/department/{dept_id}"
+                    try:
+                        response = requests.get(dept_url)
+                        if response.status_code == 200:
+                            dept_data = response.json()
+                            # Processar e criar requisição Scrapy
+                            req = self.process_department_from_data(dept_data, dept_id)
+                            if req:
+                                yield req
+                    except Exception as e:
+                        self.logger.error(f"Erro ao buscar comissão {dept_id}: {e}")
+            else:
+                # Buscar todas as comissões do tipo especificado
+                type_param = f"?type={self.commission_type}" if self.commission_type else ""
+                api_endpoint = f"{api_url}/department{type_param}"
+                
+                self.logger.info(f"Buscando comissões de: {api_endpoint}")
+                response = requests.get(api_endpoint)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    departments = data.get('departments', [])
+                    self.logger.info(f"Encontradas {len(departments)} comissões")
+                    
+                    for dept in departments:
+                        dept_id = dept.get('id')
+                        if dept_id and dept_id not in self.processed_commissions:
+                            self.processed_commissions.add(dept_id)
+                            # Processar e criar requisição Scrapy
+                            req = self.process_department_from_data(dept, dept_id)
+                            if req:
+                                yield req
+                else:
+                    self.logger.error(f"Erro ao buscar comissões: {response.status_code}")
+        except Exception as e:
+            self.logger.error(f"Erro ao buscar comissões: {e}")
+        
+        # Se há comissões temporárias, mapear suas URLs
         if not self.commission_type or self.commission_type == 'TEMPORARY':
             yield Request(
                 'https://www.camara.leg.br/comissoes/comissoes-temporarias',
                 callback=self.map_temporary_commissions,
                 priority=10
             )
-        
-        # Buscar comissões do banco via API ou processar diretamente
-        # Por enquanto, vamos processar via parâmetros ou buscar todas
-        api_url = os.environ.get('API_URL', 'http://localhost:3333')
-        
-        # Buscar comissões da API
-        try:
-            params = {}
-            if self.commission_type:
-                params['type'] = self.commission_type
-            if self.department_ids:
-                # Se IDs específicos foram fornecidos, buscar cada um
-                for dept_id in self.department_ids:
-                    dept_url = f"{api_url}/department/{dept_id}"
-                    yield Request(
-                        dept_url,
-                        callback=self.process_department,
-                        meta={'department_id': dept_id},
-                        priority=5
-                    )
-            else:
-                # Buscar todas as comissões do tipo especificado
-                type_param = f"?type={self.commission_type}" if self.commission_type else ""
-                yield Request(
-                    f"{api_url}/department{type_param}",
-                    callback=self.fetch_all_departments,
-                    priority=5
-                )
-        except Exception as e:
-            self.logger.error(f"Erro ao buscar comissões: {e}")
     
-    def fetch_all_departments(self, response):
-        """Busca todas as comissões e processa cada uma"""
-        try:
-            data = json.loads(response.text)
-            departments = data.get('departments', [])
+    def process_department_from_data(self, dept_data, dept_id):
+        """
+        Processa uma comissão a partir dos dados já obtidos
+        Retorna uma Request do Scrapy apenas para páginas da Câmara
+        """
+        dept_type = dept_data.get('type', '')
+        acronym = dept_data.get('acronym', '')
+        
+        if not dept_id:
+            self.logger.warning("Department ID não encontrado")
+            return None
+        
+        # Determinar URL de notícias baseado no tipo
+        if dept_type == 'Comissão Permanente' and acronym:
+            # Comissão permanente: URL fixa
+            news_url = f"https://www2.camara.leg.br/atividade-legislativa/comissoes/comissoes-permanentes/{acronym.lower()}/noticias"
+            self.logger.info(f"Processando comissão permanente {acronym} (ID: {dept_id}): {news_url}")
             
-            for dept in departments:
-                dept_id = dept.get('id')
-                if dept_id and dept_id not in self.processed_commissions:
-                    self.processed_commissions.add(dept_id)
-                    yield Request(
-                        response.url.replace('/department', f'/department/{dept_id}'),
-                        callback=self.process_department,
-                        meta={'department_id': dept_id, 'department': dept},
-                        priority=5
-                    )
-        except Exception as e:
-            self.logger.error(f"Erro ao processar lista de comissões: {e}")
+            # Retornar requisição Scrapy para a URL da Câmara
+            return Request(
+                news_url,
+                callback=self.parse_news_list,
+                meta={
+                    'department_id': dept_id,
+                    'news_url': news_url,
+                    'is_temporary': False
+                },
+                priority=7,
+                dont_filter=True
+            )
+        elif dept_type in ['Comissão Especial', 'Comissão Externa', 'Comissão Parlamentar de Inquérito']:
+            # Comissão temporária: será processada via map_temporary_commissions
+            self.logger.info(f"Comissão temporária {dept_id} - será processada via mapeamento")
+        else:
+            self.logger.warning(f"Tipo de comissão não suportado: {dept_type}")
+        
+        return None
     
     def map_temporary_commissions(self, response):
         """
         Mapeia comissões temporárias da página de lista
         Extrai links e tenta encontrar seção de notícias para cada uma
+        Também tenta mapear com IDs do banco via API
         """
         self.logger.info("Mapeando comissões temporárias...")
         
+        # Primeiro, buscar comissões temporárias da API para ter os IDs
+        api_url = os.environ.get('API_URL', 'http://localhost:3333')
+        try:
+            api_response = requests.get(f"{api_url}/department?type=TEMPORARY")
+            if api_response.status_code == 200:
+                api_data = api_response.json()
+                temp_departments = api_data.get('departments', [])
+                # Criar mapa de nome/URL para ID
+                dept_map = {}
+                for dept in temp_departments:
+                    # Usar nome ou sigla como chave
+                    key = dept.get('name', '').lower()
+                    dept_map[key] = dept.get('id')
+                    if dept.get('acronym'):
+                        dept_map[dept.get('acronym').lower()] = dept.get('id')
+                self.logger.info(f"Mapeadas {len(dept_map)} comissões temporárias da API")
+        except Exception as e:
+            self.logger.warning(f"Erro ao buscar comissões da API: {e}")
+            dept_map = {}
+        
         # Extrair links das comissões (especiais, externas, CPIs)
         commission_links = response.css(search_terms.get('temporary_commission_list', 'a::attr(href)')).getall()
+        commission_names = response.css(search_terms.get('temporary_commission_list', 'a::text')).getall()
         
-        for link in commission_links:
+        self.logger.info(f"Encontrados {len(commission_links)} links de comissões temporárias")
+        
+        for i, link in enumerate(commission_links):
             if link and link.startswith('/'):
                 full_url = f"https://www2.camara.leg.br{link}"
+                commission_name = commission_names[i] if i < len(commission_names) else ''
+                
+                # Tentar encontrar department_id pelo nome
+                dept_id = None
+                if commission_name:
+                    name_key = commission_name.lower().strip()
+                    dept_id = dept_map.get(name_key)
+                    if not dept_id:
+                        # Tentar match parcial
+                        for key, d_id in dept_map.items():
+                            if name_key in key or key in name_key:
+                                dept_id = d_id
+                                break
+                
                 # Navegar até a página da comissão para encontrar link de notícias
                 yield Request(
                     full_url,
                     callback=self.find_news_link,
-                    meta={'commission_url': full_url},
+                    meta={
+                        'commission_url': full_url,
+                        'commission_name': commission_name,
+                        'department_id': dept_id
+                    },
                     priority=8
                 )
     
@@ -141,6 +217,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         Encontra o link para a seção de notícias de uma comissão temporária
         """
         commission_url = response.meta.get('commission_url', '')
+        dept_id = response.meta.get('department_id')
+        commission_name = response.meta.get('commission_name', '')
         
         # Procurar link para /noticias na página
         news_link = response.css(search_terms.get('commission_news_link', 'a[href*="/noticias"]::attr(href)')).get()
@@ -149,72 +227,27 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             if news_link.startswith('/'):
                 news_url = f"https://www2.camara.leg.br{news_link}"
             else:
-                news_url = news_link
+                news_url = news_link if news_link.startswith('http') else response.urljoin(news_link)
             
-            # Tentar extrair department_id da URL ou nome da comissão
-            # Por enquanto, vamos usar a URL como identificador temporário
-            # O department_id será passado via meta quando disponível
-            
-            self.logger.info(f"Encontrado link de notícias: {news_url}")
+            if dept_id:
+                self.logger.info(f"Encontrado link de notícias para comissão {dept_id}: {news_url}")
+            else:
+                self.logger.warning(f"Link de notícias encontrado mas sem department_id: {commission_name} - {news_url}")
             
             # Processar notícias desta comissão
             yield Request(
                 news_url,
                 callback=self.parse_news_list,
                 meta={
-                    'department_id': response.meta.get('department_id'),
+                    'department_id': dept_id,
                     'news_url': news_url,
                     'is_temporary': True
                 },
                 priority=6
             )
         else:
-            self.logger.warning(f"Não foi encontrado link de notícias para: {commission_url}")
+            self.logger.warning(f"Não foi encontrado link de notícias para: {commission_url} (Comissão: {commission_name})")
     
-    def process_department(self, response):
-        """
-        Processa uma comissão específica
-        Determina se é permanente ou temporária e constrói URL apropriada
-        """
-        try:
-            dept_data = json.loads(response.text)
-            dept_id = response.meta.get('department_id') or dept_data.get('id')
-            dept_type = dept_data.get('type', '')
-            acronym = dept_data.get('acronym', '')
-            
-            if not dept_id:
-                self.logger.warning("Department ID não encontrado")
-                return
-            
-            if dept_id in self.processed_commissions:
-                return
-            self.processed_commissions.add(dept_id)
-            
-            # Determinar URL de notícias baseado no tipo
-            if dept_type == 'Comissão Permanente' and acronym:
-                # Comissão permanente: URL fixa
-                news_url = f"https://www2.camara.leg.br/atividade-legislativa/comissoes/comissoes-permanentes/{acronym.lower()}/noticias"
-                self.logger.info(f"Processando comissão permanente {acronym}: {news_url}")
-                
-                yield Request(
-                    news_url,
-                    callback=self.parse_news_list,
-                    meta={
-                        'department_id': dept_id,
-                        'news_url': news_url,
-                        'is_temporary': False
-                    },
-                    priority=7
-                )
-            elif dept_type in ['Comissão Especial', 'Comissão Externa', 'Comissão Parlamentar de Inquérito']:
-                # Comissão temporária: precisa mapear primeiro
-                # Se já temos o mapeamento, usar; senão, pular (será processado no map_temporary_commissions)
-                self.logger.info(f"Comissão temporária {dept_id} - será processada via mapeamento")
-            else:
-                self.logger.warning(f"Tipo de comissão não suportado: {dept_type}")
-                
-        except Exception as e:
-            self.logger.error(f"Erro ao processar comissão: {e}")
     
     def parse_news_list(self, response):
         """
