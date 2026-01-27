@@ -139,7 +139,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                     'is_temporary': False
                 },
                 priority=7,
-                dont_filter=True
+                dont_filter=True,
+                errback=self.handle_error
             )
         elif dept_type in ['Comissão Especial', 'Comissão Externa', 'Comissão Parlamentar de Inquérito']:
             # Comissão temporária: será processada via map_temporary_commissions
@@ -209,7 +210,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                         'commission_name': commission_name,
                         'department_id': dept_id
                     },
-                    priority=8
+                    priority=8,
+                    errback=self.handle_error
                 )
     
     def find_news_link(self, response):
@@ -243,7 +245,8 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                     'news_url': news_url,
                     'is_temporary': True
                 },
-                priority=6
+                priority=6,
+                errback=self.handle_error
             )
         else:
             self.logger.warning(f"Não foi encontrado link de notícias para: {commission_url} (Comissão: {commission_name})")
@@ -255,17 +258,59 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         Similar ao parse do scraper original, mas com departmentId
         """
         department_id = response.meta.get('department_id')
-        if not department_id:
-            self.logger.warning("Department ID não encontrado no meta")
+        news_url = response.meta.get('news_url', response.url)
+        
+        self.logger.info(f"Parsing news list - URL: {response.url}, Department ID: {department_id}, Status: {response.status}")
+        
+        # Verificar se a página foi redirecionada para login
+        if 'require_login' in response.url or response.status == 302:
+            self.logger.warning(f"Página redirecionada para login: {response.url}")
             return
+        
+        # Verificar se a página retornou 404
+        if response.status == 404:
+            self.logger.warning(f"Página não encontrada (404): {response.url}")
+            return
+        
+        if not department_id:
+            self.logger.warning(f"Department ID não encontrado no meta para URL: {response.url}")
+            return
+        
+        # Verificar se o seletor CSS está encontrando elementos
+        article_selector = search_terms.get('article', 'li.l-lista-noticias__item')
+        articles_found = response.css(article_selector)
+        articles_count = len(articles_found)
+        
+        self.logger.info(f"Seletor CSS usado: '{article_selector}' - Encontrados {articles_count} elementos")
+        
+        # Se não encontrou artigos, tentar seletores alternativos
+        if articles_count == 0:
+            # Tentar seletores alternativos
+            alt_selectors = [
+                'li.l-lista-noticias__item',
+                'article',
+                '.l-lista-noticias__item',
+                'ul.l-lista-noticias li',
+                '.noticia-item',
+            ]
+            for alt_selector in alt_selectors:
+                alt_articles = response.css(alt_selector)
+                if len(alt_articles) > 0:
+                    self.logger.warning(f"Seletor original não funcionou, mas seletor alternativo '{alt_selector}' encontrou {len(alt_articles)} elementos")
+                    articles_found = alt_articles
+                    articles_count = len(alt_articles)
+                    break
         
         articles_in_timeframe = 0
         
-        for article in response.css(search_terms['article']):
+        for article in articles_found:
             if self.article_count >= self.MAX_ARTICLES_PER_COMMISSION * len(self.processed_commissions):
+                self.logger.info(f"Limite de artigos atingido: {self.article_count}")
                 break
             
-            link = article.css(search_terms['link']).get()
+            link_selector = search_terms.get('link', 'a::attr(href)')
+            link = article.css(link_selector).get()
+            
             if link:
                 # Garantir URL absoluta
                 if link.startswith('/'):
@@ -273,28 +318,66 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 elif not link.startswith('http'):
                     link = response.urljoin(link)
                 
+                self.logger.debug(f"Encontrado link de artigo: {link}")
                 articles_in_timeframe += 1
                 yield Request(
                     link,
                     callback=self.parse_article,
                     meta={'department_id': department_id},
-                    priority=1
+                    priority=1,
+                    errback=self.handle_error
                 )
+            else:
+                self.logger.debug(f"Link não encontrado no artigo usando seletor '{link_selector}'")
+        
+        self.logger.info(f"Total de artigos encontrados nesta página: {articles_in_timeframe} de {articles_count}")
         
         if articles_in_timeframe == 0:
+            self.logger.warning(f"Nenhum artigo encontrado na página: {response.url}")
             self.found_old_articles = True
             return
         
         # Tentar próxima página se existir
         next_page = response.css('a[rel="next"]::attr(href)').get()
+        if not next_page:
+            # Tentar outros seletores para próxima página
+            next_page = response.css('.pagination a.next::attr(href)').get()
+            if not next_page:
+                next_page = response.css('a:contains("Próxima")::attr(href)').get()
+        
         if next_page:
             next_url = response.urljoin(next_page)
+            self.logger.info(f"Encontrada próxima página: {next_url}")
             yield Request(
                 next_url,
                 callback=self.parse_news_list,
                 meta=response.meta,
-                priority=5
+                priority=5,
+                errback=self.handle_error
             )
+        else:
+            self.logger.debug("Nenhuma próxima página encontrada")
+    
+    def handle_error(self, failure):
+        """Trata erros nas requisições"""
+        request = failure.request
+        url = request.url if request else "URL desconhecida"
+        
+        # Verificar tipo de erro
+        if hasattr(failure.value, 'response'):
+            response = failure.value.response
+            status = response.status if response else "N/A"
+            self.logger.error(f"Erro HTTP {status} ao processar requisição: {url}")
+            
+            # Se for 404, apenas logar como warning
+            if response and response.status == 404:
+                self.logger.warning(f"Página não encontrada (404): {url}")
+            # Se for redirecionamento para login
+            elif response and response.status in [302, 301]:
+                if 'require_login' in url or 'login' in url.lower():
+                    self.logger.warning(f"Página requer autenticação: {url}")
+        else:
+            self.logger.error(f"Erro ao processar requisição: {url} - {type(failure.value).__name__}: {failure.value}")
     
     def parse_article(self, response):
         """
@@ -303,37 +386,115 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         """
         department_id = response.meta.get('department_id')
         
-        updated = response.css(search_terms['updated']).get()
-        if not updated:
+        self.logger.debug(f"Parsing article - URL: {response.url}, Department ID: {department_id}")
+        
+        # Verificar status da resposta
+        if response.status != 200:
+            self.logger.warning(f"Artigo retornou status {response.status}: {response.url}")
             return
         
-        updated = updated.strip()
-        updated = updated.split(" ")[0]
-        updated = updated.replace("/", "-")
+        updated_selector = search_terms.get('updated', 'p.g-artigo__data-hora::text')
+        updated = response.css(updated_selector).get()
+        
+        if not updated:
+            # Tentar seletores alternativos para data
+            alt_date_selectors = [
+                'p.g-artigo__data-hora::text',
+                '.g-artigo__data-hora::text',
+                '.data-hora::text',
+                'time::attr(datetime)',
+                '.data::text',
+            ]
+            for alt_selector in alt_date_selectors:
+                updated = response.css(alt_selector).get()
+                if updated:
+                    self.logger.debug(f"Data encontrada com seletor alternativo: '{alt_selector}'")
+                    break
+            
+            if not updated:
+                self.logger.warning(f"Data não encontrada no artigo: {response.url} (seletor usado: '{updated_selector}')")
+                return
         
         try:
+            updated = updated.strip()
+            updated = updated.split(" ")[0]
+            updated = updated.replace("/", "-")
             updated = datetime.strptime(updated, "%d-%m-%Y")
-        except ValueError:
-            self.logger.warning(f"Formato de data inválido: {updated}")
+            self.logger.debug(f"Data parseada: {updated}")
+        except ValueError as e:
+            self.logger.warning(f"Formato de data inválido: '{updated}' no artigo {response.url} - Erro: {e}")
+            return
+        except Exception as e:
+            self.logger.error(f"Erro ao processar data: {e} - Artigo: {response.url}")
             return
         
-        title = response.css(search_terms['title']).get()
-        content = response.css(search_terms['content']).getall()
-        content = BeautifulSoup(" ".join(content), "html.parser").text
-        content = content.replace("\n", " ")
+        title_selector = search_terms.get('title', 'h1.g-artigo__titulo::text')
+        title = response.css(title_selector).get()
         
+        if not title:
+            # Tentar seletores alternativos para título
+            alt_title_selectors = [
+                'h1.g-artigo__titulo::text',
+                'h1::text',
+                '.g-artigo__titulo::text',
+                'title::text',
+            ]
+            for alt_selector in alt_title_selectors:
+                title = response.css(alt_selector).get()
+                if title:
+                    break
+        
+        if not title:
+            self.logger.warning(f"Título não encontrado no artigo: {response.url}")
+            title = "Sem título"
+        
+        content_selector = search_terms.get('content', 'div.js-article-read-more')
+        content = response.css(content_selector).getall()
+        
+        if not content:
+            # Tentar seletores alternativos para conteúdo
+            alt_content_selectors = [
+                'div.js-article-read-more',
+                '.js-article-read-more',
+                'article p',
+                '.conteudo',
+                '.artigo-conteudo',
+            ]
+            for alt_selector in alt_content_selectors:
+                content = response.css(alt_selector).getall()
+                if content:
+                    break
+        
+        if not content:
+            self.logger.warning(f"Conteúdo não encontrado no artigo: {response.url}")
+            content = [""]
+        
+        try:
+            content = BeautifulSoup(" ".join(content), "html.parser").text
+            content = content.replace("\n", " ")
+            content = content.strip()
+        except Exception as e:
+            self.logger.error(f"Erro ao processar conteúdo: {e} - Artigo: {response.url}")
+            content = ""
+        
+        # Verificar se o artigo está no período válido
         if search_limit <= updated <= today:
             item = articleItem(
                 updated=updated,
                 title=title,
                 content=content,
                 link=response.url,
-                departmentId=department_id,  # Novo campo
+                departmentId=department_id,
             )
             yield item
             self.data.append(item)
             self.article_count += 1
+            self.logger.info(f"Artigo coletado com sucesso: {title[:50]}... (Total: {self.article_count})")
         else:
+            if updated < search_limit:
+                self.logger.debug(f"Artigo muito antigo (data: {updated}): {response.url}")
+            else:
+                self.logger.debug(f"Artigo no futuro (data: {updated}): {response.url}")
             self.found_old_articles = True
     
     @classmethod
