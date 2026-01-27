@@ -285,21 +285,64 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         
         # Se não encontrou artigos, tentar seletores alternativos
         if articles_count == 0:
-            # Tentar seletores alternativos
+            # Logar um trecho do HTML para debug (apenas uma vez por comissão)
+            if not hasattr(self, '_html_logged'):
+                self._html_logged = set()
+            
+            if department_id not in self._html_logged:
+                html_sample = response.text[:2000] if len(response.text) > 2000 else response.text
+                self.logger.info(f"Trecho do HTML da página (primeiros 2000 chars) para debug:\n{html_sample}")
+                self._html_logged.add(department_id)
+            
+            # Tentar seletores alternativos mais abrangentes
             alt_selectors = [
-                'li.l-lista-noticias__item',
                 'article',
                 '.l-lista-noticias__item',
                 'ul.l-lista-noticias li',
                 '.noticia-item',
+                'li[class*="noticia"]',
+                'li[class*="lista"]',
+                'div[class*="noticia"]',
+                'ul li a',
+                '.lista-noticias li',
+                'section article',
+                'div.noticia',
+                'li.item',
             ]
+            
             for alt_selector in alt_selectors:
-                alt_articles = response.css(alt_selector)
-                if len(alt_articles) > 0:
-                    self.logger.warning(f"Seletor original não funcionou, mas seletor alternativo '{alt_selector}' encontrou {len(alt_articles)} elementos")
-                    articles_found = alt_articles
-                    articles_count = len(alt_articles)
-                    break
+                try:
+                    alt_articles = response.css(alt_selector)
+                    if len(alt_articles) > 0:
+                        self.logger.warning(f"Seletor original não funcionou, mas seletor alternativo '{alt_selector}' encontrou {len(alt_articles)} elementos")
+                        articles_found = alt_articles
+                        articles_count = len(alt_articles)
+                        # Atualizar o seletor para usar nos links também
+                        article_selector = alt_selector
+                        break
+                except Exception as e:
+                    self.logger.debug(f"Erro ao testar seletor '{alt_selector}': {e}")
+                    continue
+            
+            # Se ainda não encontrou, tentar buscar por links que contenham "/noticias/"
+            if articles_count == 0:
+                news_links = response.css('a[href*="/noticias/"]')
+                news_links_count = len(news_links)
+                if news_links_count > 0:
+                    self.logger.info(f"Encontrados {news_links_count} links que contêm '/noticias/' na URL - usando esses links diretamente")
+                    articles_found = news_links
+                    articles_count = news_links_count
+                    article_selector = 'a[href*="/noticias/"]'
+                else:
+                    # Última tentativa: buscar qualquer link que possa ser uma notícia
+                    all_links = response.css('a::attr(href)').getall()
+                    news_links_filtered = [link for link in all_links if link and ('/noticias/' in link or '/noticia/' in link)]
+                    if len(news_links_filtered) > 0:
+                        self.logger.info(f"Encontrados {len(news_links_filtered)} links potenciais de notícias via filtro")
+                        # Usar XPath para pegar os elementos <a> completos
+                        articles_found = response.xpath('//a[contains(@href, "/noticias/") or contains(@href, "/noticia/")]')
+                        articles_count = len(articles_found)
+                        article_selector = 'xpath_links'
         
         articles_in_timeframe = 0
         
@@ -308,8 +351,18 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 self.logger.info(f"Limite de artigos atingido: {self.article_count}")
                 break
             
-            link_selector = search_terms.get('link', 'a::attr(href)')
-            link = article.css(link_selector).get()
+            # Se o artigo já é um link (a tag), usar diretamente
+            if article_selector.startswith('a[') or article_selector == 'xpath_links':
+                link = article.css('::attr(href)').get()
+                if not link:
+                    # Tentar XPath se CSS não funcionou
+                    link = article.xpath('./@href').get()
+            else:
+                link_selector = search_terms.get('link', 'a::attr(href)')
+                link = article.css(link_selector).get()
+                if not link:
+                    # Tentar encontrar qualquer link dentro do elemento
+                    link = article.xpath('.//a/@href').get()
             
             if link:
                 # Garantir URL absoluta
@@ -318,17 +371,44 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 elif not link.startswith('http'):
                     link = response.urljoin(link)
                 
-                self.logger.debug(f"Encontrado link de artigo: {link}")
-                articles_in_timeframe += 1
-                yield Request(
-                    link,
-                    callback=self.parse_article,
-                    meta={'department_id': department_id},
-                    priority=1,
-                    errback=self.handle_error
-                )
+                # Verificar se o link é realmente uma notícia (contém /noticias/)
+                if '/noticias/' in link:
+                    self.logger.debug(f"Encontrado link de artigo: {link}")
+                    articles_in_timeframe += 1
+                    yield Request(
+                        link,
+                        callback=self.parse_article,
+                        meta={'department_id': department_id},
+                        priority=1,
+                        errback=self.handle_error
+                    )
+                else:
+                    self.logger.debug(f"Link ignorado (não é notícia): {link}")
             else:
-                self.logger.debug(f"Link não encontrado no artigo usando seletor '{link_selector}'")
+                # Tentar extrair link de outras formas
+                link = article.css('::attr(href)').get()
+                if not link:
+                    # Tentar encontrar qualquer link dentro do elemento
+                    link = article.xpath('.//a/@href').get()
+                
+                if link:
+                    if link.startswith('/'):
+                        link = f"https://www2.camara.leg.br{link}"
+                    elif not link.startswith('http'):
+                        link = response.urljoin(link)
+                    
+                    if '/noticias/' in link:
+                        self.logger.debug(f"Encontrado link de artigo (método alternativo): {link}")
+                        articles_in_timeframe += 1
+                        yield Request(
+                            link,
+                            callback=self.parse_article,
+                            meta={'department_id': department_id},
+                            priority=1,
+                            errback=self.handle_error
+                        )
+                else:
+                    self.logger.debug(f"Link não encontrado no artigo usando seletor '{link_selector}'")
         
         self.logger.info(f"Total de artigos encontrados nesta página: {articles_in_timeframe} de {articles_count}")
         
