@@ -183,8 +183,77 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             dept_map = {}
         
         # Extrair links das comissões (especiais, externas, CPIs)
-        commission_links = response.css(search_terms.get('temporary_commission_list', 'a::attr(href)')).getall()
-        commission_names = response.css(search_terms.get('temporary_commission_list', 'a::text')).getall()
+        # Tentar múltiplos seletores para encontrar os links
+        commission_links = []
+        commission_names = []
+        
+        # Seletor original do JSON
+        selector = search_terms.get('temporary_commission_list', 'ul.l-lista-comissoes li a')
+        commission_links = response.css(f'{selector}::attr(href)').getall()
+        commission_names = response.css(f'{selector}::text').getall()
+        
+        # Se não encontrou, tentar seletores alternativos
+        if len(commission_links) == 0:
+            self.logger.warning(f"Seletor original '{selector}' não encontrou links. Tentando alternativos...")
+            
+            # Logar um trecho do HTML para debug
+            html_sample = response.text[:3000] if len(response.text) > 3000 else response.text
+            self.logger.info(f"Trecho do HTML da página de comissões temporárias (primeiros 3000 chars):\n{html_sample}")
+            
+            # Tentar seletores alternativos mais abrangentes
+            alt_selectors = [
+                'ul.l-lista-comissoes li a',
+                'ul.lista-comissoes li a',
+                '.lista-comissoes li a',
+                'ul li a[href*="/comissoes/"]',
+                'a[href*="/comissoes/"]',
+                'section a[href*="/comissoes/"]',
+                'div.comissoes a',
+                'article a[href*="/comissoes/"]',
+                'a[href*="comissao"]',
+                'li a[href*="/comissoes/"]',
+                '.comissoes-temporarias a',
+                'div[class*="comissoes"] a',
+                'ul[class*="lista"] a',
+            ]
+            
+            for alt_selector in alt_selectors:
+                try:
+                    links = response.css(f'{alt_selector}::attr(href)').getall()
+                    names = response.css(f'{alt_selector}::text').getall()
+                    
+                    # Filtrar links válidos (que apontam para comissões temporárias)
+                    valid_links = []
+                    valid_names = []
+                    for i, link in enumerate(links):
+                        if link:
+                            # Normalizar link (remover espaços, etc)
+                            link = link.strip()
+                            
+                            # Verificar se é um link válido de comissão
+                            # Deve conter /comissoes/ mas não deve ser a própria página de lista
+                            is_valid = (
+                                '/comissoes/' in link and 
+                                'comissoes-temporarias' not in link and
+                                link not in ['/comissoes/', '/comissoes']
+                            )
+                            
+                            if is_valid:
+                                # Evitar links duplicados
+                                if link not in valid_links:
+                                    valid_links.append(link)
+                                    # Limpar nome (remover espaços extras)
+                                    name = names[i].strip() if i < len(names) and names[i] else ''
+                                    valid_names.append(name)
+                    
+                    if len(valid_links) > 0:
+                        self.logger.info(f"Seletor alternativo '{alt_selector}' encontrou {len(valid_links)} links válidos")
+                        commission_links = valid_links
+                        commission_names = valid_names
+                        break
+                except Exception as e:
+                    self.logger.debug(f"Erro ao testar seletor '{alt_selector}': {e}")
+                    continue
         
         self.logger.info(f"Encontrados {len(commission_links)} links de comissões temporárias")
         
