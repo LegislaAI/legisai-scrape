@@ -57,6 +57,31 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         self.processed_commissions = set()
         self.dept_map = {}  # Mapa nome -> id
         self.dept_url_map = {}  # Mapa slug -> id
+        # Controle de URLs de paginação visitadas por comissão (evita loops)
+        self.visited_pagination_urls = {}  # Dict: commission_key -> set de URLs visitadas
+    
+    def extract_b_start(self, url):
+        """
+        Extrai o valor de b_start:int da URL
+        Retorna 0 se não encontrar o parâmetro
+        """
+        if not url:
+            return 0
+        import re
+        match = re.search(r'b_start:int=(\d+)', url)
+        return int(match.group(1)) if match else 0
+    
+    def get_base_url(self, url):
+        """
+        Extrai URL base sem parâmetros de paginação
+        Usado para identificar a comissão quando não há department_id
+        """
+        if not url:
+            return ''
+        import re
+        # Remover parâmetros de query relacionados à paginação
+        base = re.sub(r'[?&]b_start:int=\d+', '', url)
+        return base.rstrip('?&')
     
     def normalize_text(self, text):
         """
@@ -944,26 +969,76 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 elif 'pagina=2' in page2_link:
                     next_page = page2_link.replace('pagina=2', 'pagina=3')
         
-        # Estratégia 5: Verificar se há indicadores de paginação na página
+        # Estratégia 5: Buscar próxima página por incremento de b_start
         if not next_page:
             # Contar quantos links de paginação existem
             pagination_links = response.css('.pagination a::attr(href)').getall()
             if len(pagination_links) > 0:
                 self.logger.debug(f"Encontrados {len(pagination_links)} links de paginação, mas nenhum identificado como 'próxima'")
-                # Pegar o último link (geralmente é o próximo)
-                if len(pagination_links) > 1:
-                    next_page = pagination_links[-1]
+                
+                # Extrair b_start da URL atual
+                current_b_start = self.extract_b_start(response.url)
+                next_b_start = current_b_start + 20  # Incremento padrão do site da Câmara
+                
+                # Procurar link com b_start igual ao próximo esperado
+                for link in pagination_links:
+                    if link:
+                        link_b_start = self.extract_b_start(link)
+                        if link_b_start == next_b_start:
+                            next_page = link
+                            self.logger.debug(f"Encontrada próxima página via Estratégia 5: b_start {current_b_start} → {next_b_start}")
+                            break
+                
+                # Se não encontrou o próximo exato, procurar qualquer link com b_start maior
+                if not next_page:
+                    for link in pagination_links:
+                        if link:
+                            link_b_start = self.extract_b_start(link)
+                            if link_b_start > current_b_start:
+                                next_page = link
+                                self.logger.debug(f"Encontrada próxima página via Estratégia 5 (fallback): b_start {current_b_start} → {link_b_start}")
+                                break
         
         if next_page:
             next_url = response.urljoin(next_page)
-            self.logger.info(f"Encontrada próxima página: {next_url}")
+            
+            # Validar que não é a mesma página
+            if next_url == response.url:
+                self.logger.debug(f"Próxima página é a mesma que a atual. Parando paginação.")
+                return
+            
+            # Validar que b_start está aumentando
+            current_b_start = self.extract_b_start(response.url)
+            next_b_start = self.extract_b_start(next_url)
+            
+            if next_b_start <= current_b_start:
+                self.logger.debug(f"Próxima página tem b_start menor ou igual ({next_b_start} <= {current_b_start}). Parando paginação.")
+                return
+            
+            # Identificar chave da comissão (para controle por comissão)
+            # Usar department_id se disponível, senão usar URL base (sem parâmetros)
+            commission_key = department_id if department_id else self.get_base_url(response.url)
+            
+            # Inicializar set de URLs visitadas para esta comissão se não existir
+            if commission_key not in self.visited_pagination_urls:
+                self.visited_pagination_urls[commission_key] = set()
+            
+            # Verificar se já foi visitada para esta comissão
+            if next_url in self.visited_pagination_urls[commission_key]:
+                self.logger.debug(f"URL de paginação já visitada para esta comissão: {next_url}. Parando para evitar loop.")
+                return
+            
+            # Marcar como visitada para esta comissão
+            self.visited_pagination_urls[commission_key].add(next_url)
+            
+            self.logger.info(f"Encontrada próxima página: {next_url} (b_start: {current_b_start} → {next_b_start}, Comissão: {commission_key})")
             yield Request(
                 next_url,
                 callback=self.parse_news_list,
                 meta=response.meta,
                 priority=5,
-                errback=self.handle_error,
-                dont_filter=True  # Permitir mesmo se já foi visitada (pode ser página diferente)
+                errback=self.handle_error
+                # Removido dont_filter=True - não é necessário com controle de URLs visitadas
             )
         else:
             self.logger.debug("Nenhuma próxima página encontrada")
