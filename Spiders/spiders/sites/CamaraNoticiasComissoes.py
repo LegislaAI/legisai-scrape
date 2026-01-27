@@ -55,6 +55,156 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         self.department_ids = department_ids.split(',') if department_ids else None
         self.commission_type = commission_type
         self.processed_commissions = set()
+        self.dept_map = {}  # Mapa nome -> id
+        self.dept_url_map = {}  # Mapa slug -> id
+    
+    def normalize_text(self, text):
+        """
+        Normaliza texto para matching: remove acentos, espaços extras, converte para minúsculas
+        """
+        if not text:
+            return ''
+        
+        import unicodedata
+        # Remover acentos
+        text = unicodedata.normalize('NFKD', text)
+        text = ''.join(c for c in text if not unicodedata.combining(c))
+        
+        # Converter para minúsculas e remover espaços extras
+        text = text.lower().strip()
+        # Remover caracteres especiais comuns
+        text = text.replace('-', ' ').replace('_', ' ')
+        # Remover múltiplos espaços
+        import re
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text
+    
+    def create_slug_from_name(self, name):
+        """
+        Cria um slug a partir do nome da comissão, similar ao formato usado nas URLs
+        """
+        if not name:
+            return ''
+        
+        # Normalizar o texto
+        slug = self.normalize_text(name)
+        
+        # Remover prefixos comuns
+        prefixes = [
+            'comissao especial sobre ',
+            'comissao especial da ',
+            'comissao especial ',
+            'comissao externa sobre ',
+            'comissao externa ',
+            'cpi sobre ',
+            'cpi ',
+            'comissao parlamentar de inquérito sobre ',
+            'comissao parlamentar de inquérito ',
+        ]
+        
+        for prefix in prefixes:
+            if slug.startswith(prefix):
+                slug = slug[len(prefix):].strip()
+                break
+        
+        # Remover palavras muito comuns que não ajudam no matching
+        stop_words = ['a', 'o', 'e', 'de', 'da', 'do', 'em', 'no', 'na', 'para', 'com', 'sobre']
+        words = slug.split()
+        words = [w for w in words if w not in stop_words and len(w) > 2]
+        
+        # Pegar as primeiras 5-7 palavras mais significativas
+        significant_words = words[:7]
+        
+        return ' '.join(significant_words)
+    
+    def extract_slug_from_url(self, url):
+        """
+        Extrai o slug da URL da comissão temporária
+        Ex: https://www2.camara.leg.br/.../comissao-especial-sobre-direito-digital
+        Retorna: 'comissao especial sobre direito digital'
+        """
+        if not url:
+            return ''
+        
+        # Extrair a última parte da URL (o slug)
+        parts = url.rstrip('/').split('/')
+        if parts:
+            slug = parts[-1]
+            # Converter hífens em espaços e normalizar
+            slug = slug.replace('-', ' ')
+            return self.normalize_text(slug)
+        
+        return ''
+    
+    def find_department_id(self, commission_name, commission_url):
+        """
+        Tenta encontrar o department_id usando múltiplas estratégias:
+        1. Matching exato por nome normalizado
+        2. Matching parcial por nome
+        3. Matching por slug da URL
+        4. Fuzzy matching por nome
+        """
+        dept_id = None
+        
+        # Estratégia 1: Matching exato por nome normalizado
+        if commission_name:
+            name_key = self.normalize_text(commission_name)
+            dept_id = self.dept_map.get(name_key)
+            
+            if dept_id:
+                self.logger.debug(f"Department ID encontrado por nome exato: {dept_id}")
+                return dept_id
+        
+        # Estratégia 2: Matching parcial (substring)
+        if commission_name and not dept_id:
+            name_key = self.normalize_text(commission_name)
+            # Tentar encontrar por substring (nome da comissão contém ou é contido)
+            for key, d_id in self.dept_map.items():
+                # Verificar se há sobreposição significativa
+                if len(name_key) > 10 and len(key) > 10:
+                    # Se uma string contém mais de 70% da outra
+                    if name_key in key or key in name_key:
+                        # Verificar se a sobreposição é significativa
+                        overlap = min(len(name_key), len(key))
+                        if overlap > max(len(name_key), len(key)) * 0.7:
+                            dept_id = d_id
+                            self.logger.debug(f"Department ID encontrado por matching parcial: {dept_id} (nome: '{commission_name}' -> key: '{key}')")
+                            break
+        
+        # Estratégia 3: Matching por slug da URL
+        if commission_url and not dept_id:
+            url_slug = self.extract_slug_from_url(commission_url)
+            if url_slug:
+                # Tentar matching exato
+                dept_id = self.dept_url_map.get(url_slug)
+                
+                if not dept_id:
+                    # Tentar matching parcial no slug
+                    for slug_key, d_id in self.dept_url_map.items():
+                        # Verificar se há palavras-chave em comum
+                        url_words = set(url_slug.split())
+                        slug_words = set(slug_key.split())
+                        common_words = url_words.intersection(slug_words)
+                        
+                        # Se há pelo menos 3 palavras em comum ou 50% de sobreposição
+                        if len(common_words) >= 3 or (len(common_words) > 0 and len(common_words) >= min(len(url_words), len(slug_words)) * 0.5):
+                            dept_id = d_id
+                            self.logger.debug(f"Department ID encontrado por slug da URL: {dept_id} (URL: '{commission_url}')")
+                            break
+        
+        # Estratégia 4: Tentar criar slug do nome e fazer matching
+        if commission_name and not dept_id:
+            name_slug = self.create_slug_from_name(commission_name)
+            if name_slug:
+                dept_id = self.dept_url_map.get(name_slug)
+                if dept_id:
+                    self.logger.debug(f"Department ID encontrado por slug do nome: {dept_id}")
+        
+        if not dept_id:
+            self.logger.debug(f"Department ID não encontrado para: '{commission_name}' (URL: {commission_url})")
+        
+        return dept_id
         
     def start_requests(self):
         """
@@ -163,24 +313,88 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         self.logger.info("Mapeando comissões temporárias...")
         
         # Primeiro, buscar comissões temporárias da API para ter os IDs
-        api_url = os.environ.get('API_URL', 'http://localhost:3333')
-        try:
-            api_response = requests.get(f"{api_url}/department?type=TEMPORARY")
-            if api_response.status_code == 200:
-                api_data = api_response.json()
-                temp_departments = api_data.get('departments', [])
-                # Criar mapa de nome/URL para ID
-                dept_map = {}
-                for dept in temp_departments:
-                    # Usar nome ou sigla como chave
-                    key = dept.get('name', '').lower()
-                    dept_map[key] = dept.get('id')
-                    if dept.get('acronym'):
-                        dept_map[dept.get('acronym').lower()] = dept.get('id')
-                self.logger.info(f"Mapeadas {len(dept_map)} comissões temporárias da API")
-        except Exception as e:
-            self.logger.warning(f"Erro ao buscar comissões da API: {e}")
-            dept_map = {}
+        # (se ainda não foram carregados)
+        if not self.dept_map:
+            api_url = os.environ.get('API_URL', 'http://localhost:3333')
+            
+            try:
+                # Buscar todas as páginas de comissões temporárias
+                all_temp_departments = []
+                page = 1
+                while True:
+                    api_response = requests.get(f"{api_url}/department?type=TEMPORARY&page={page}")
+                    if api_response.status_code != 200:
+                        break
+                    
+                    api_data = api_response.json()
+                    departments = api_data.get('departments', [])
+                    if not departments:
+                        break
+                    
+                    all_temp_departments.extend(departments)
+                    
+                    # Verificar se há mais páginas
+                    total_pages = api_data.get('pages', 1)
+                    if page >= total_pages:
+                        break
+                    page += 1
+                
+                self.logger.info(f"Buscadas {len(all_temp_departments)} comissões temporárias da API (todas as páginas)")
+                
+                # Criar múltiplos mapas para matching robusto
+                for dept in all_temp_departments:
+                    dept_id = dept.get('id')
+                    dept_name = dept.get('name', '').strip()
+                    dept_acronym = dept.get('acronym', '').strip()
+                    dept_surname = dept.get('surname', '').strip()
+                    
+                    if not dept_id:
+                        continue
+                    
+                    # 1. Mapa por nome completo (normalizado)
+                    if dept_name:
+                        name_key = self.normalize_text(dept_name)
+                        self.dept_map[name_key] = dept_id
+                        
+                        # Também adicionar variações do nome
+                        # Remover prefixos comuns
+                        name_variations = [
+                            dept_name.replace('Comissão Especial sobre ', ''),
+                            dept_name.replace('Comissão Especial da ', ''),
+                            dept_name.replace('Comissão Especial ', ''),
+                            dept_name.replace('Comissão Externa sobre ', ''),
+                            dept_name.replace('Comissão Externa ', ''),
+                            dept_name.replace('CPI - ', ''),
+                            dept_name.replace('CPI ', ''),
+                        ]
+                        for variation in name_variations:
+                            if variation and variation != dept_name:
+                                var_key = self.normalize_text(variation)
+                                if var_key not in self.dept_map:  # Não sobrescrever se já existe
+                                    self.dept_map[var_key] = dept_id
+                    
+                    # 2. Mapa por sigla
+                    if dept_acronym:
+                        self.dept_map[dept_acronym.lower()] = dept_id
+                    
+                    # 3. Mapa por surname (apelido)
+                    if dept_surname:
+                        surname_key = self.normalize_text(dept_surname)
+                        self.dept_map[surname_key] = dept_id
+                    
+                    # 4. Criar slug da URL para matching
+                    # Extrair palavras-chave do nome para criar um slug similar à URL
+                    if dept_name:
+                        slug = self.create_slug_from_name(dept_name)
+                        if slug:
+                            self.dept_url_map[slug] = dept_id
+                
+                self.logger.info(f"Criados mapas: {len(self.dept_map)} entradas por nome, {len(self.dept_url_map)} entradas por slug")
+                
+            except Exception as e:
+                self.logger.warning(f"Erro ao buscar comissões da API: {e}")
+                self.dept_map = {}
+                self.dept_url_map = {}
         
         # Extrair links das comissões (especiais, externas, CPIs)
         # Tentar múltiplos seletores para encontrar os links
@@ -367,19 +581,13 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
                 
                 commission_name = commission_names[i] if i < len(commission_names) else ''
                 
-                # Tentar encontrar department_id pelo nome
-                dept_id = None
-                if commission_name:
-                    name_key = commission_name.lower().strip()
-                    dept_id = dept_map.get(name_key)
-                    if not dept_id:
-                        # Tentar match parcial
-                        for key, d_id in dept_map.items():
-                            if name_key in key or key in name_key:
-                                dept_id = d_id
-                                break
+                # Tentar encontrar department_id usando estratégia robusta
+                dept_id = self.find_department_id(commission_name, full_url)
                 
-                self.logger.debug(f"Processando comissão temporária: {full_url} (Nome: {commission_name}, ID: {dept_id})")
+                if dept_id:
+                    self.logger.info(f"Processando comissão temporária: {full_url} (Nome: {commission_name}, ID: {dept_id})")
+                else:
+                    self.logger.warning(f"Processando comissão temporária SEM department_id: {full_url} (Nome: {commission_name})")
                 
                 # Navegar até a página da comissão para encontrar link de notícias
                 yield Request(
@@ -405,25 +613,55 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         # Procurar link para /noticias na página
         news_link = response.css(search_terms.get('commission_news_link', 'a[href*="/noticias"]::attr(href)')).get()
         
+        # Se não encontrou com CSS, tentar XPath
+        if not news_link:
+            news_link = response.xpath('//a[contains(@href, "/noticias")]/@href').get()
+        
         if news_link:
+            # Limpar o link (remover HTML se houver, espaços, etc)
+            news_link = news_link.strip()
+            # Remover qualquer HTML que possa ter sido capturado
+            if '<' in news_link:
+                # Extrair apenas a URL do HTML
+                import re
+                url_match = re.search(r'(https?://[^\s<>"]+)', news_link)
+                if url_match:
+                    news_link = url_match.group(1)
+                else:
+                    # Tentar extrair href
+                    href_match = re.search(r'href=["\']([^"\']+)["\']', news_link)
+                    if href_match:
+                        news_link = href_match.group(1)
+            
+            # Normalizar URL
             if news_link.startswith('/'):
                 news_url = f"https://www2.camara.leg.br{news_link}"
+            elif news_link.startswith('http'):
+                news_url = news_link
             else:
-                news_url = news_link if news_link.startswith('http') else response.urljoin(news_link)
+                news_url = response.urljoin(news_link)
+            
+            # Remover fragmentos e parâmetros desnecessários
+            if '<' in news_url or '>' in news_url:
+                # Ainda tem HTML, tentar limpar mais
+                news_url = news_url.split('<')[0].split('>')[0].strip()
             
             if dept_id:
                 self.logger.info(f"Encontrado link de notícias para comissão {dept_id}: {news_url}")
             else:
-                self.logger.warning(f"Link de notícias encontrado mas sem department_id: {commission_name} - {news_url}")
+                self.logger.info(f"Link de notícias encontrado (sem department_id, mas processando mesmo assim): {commission_name} - {news_url}")
             
-            # Processar notícias desta comissão
+            # Processar notícias desta comissão mesmo sem department_id
+            # Para comissões temporárias, o department_id pode ser None
             yield Request(
                 news_url,
                 callback=self.parse_news_list,
                 meta={
-                    'department_id': dept_id,
+                    'department_id': dept_id,  # Pode ser None para comissões temporárias
                     'news_url': news_url,
-                    'is_temporary': True
+                    'is_temporary': True,
+                    'commission_name': commission_name,
+                    'commission_url': commission_url
                 },
                 priority=6,
                 errback=self.handle_error
@@ -439,8 +677,10 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         """
         department_id = response.meta.get('department_id')
         news_url = response.meta.get('news_url', response.url)
+        is_temporary = response.meta.get('is_temporary', False)
+        commission_name = response.meta.get('commission_name', '')
         
-        self.logger.info(f"Parsing news list - URL: {response.url}, Department ID: {department_id}, Status: {response.status}")
+        self.logger.info(f"Parsing news list - URL: {response.url}, Department ID: {department_id}, Status: {response.status}, Temporária: {is_temporary}")
         
         # Verificar se a página foi redirecionada para login
         if 'require_login' in response.url or response.status == 302:
@@ -452,9 +692,14 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             self.logger.warning(f"Página não encontrada (404): {response.url}")
             return
         
+        # Para comissões temporárias, department_id pode ser None
+        # Continuar processamento mesmo sem department_id
         if not department_id:
-            self.logger.warning(f"Department ID não encontrado no meta para URL: {response.url}")
-            return
+            if is_temporary:
+                self.logger.info(f"Processando notícias de comissão temporária sem department_id: {commission_name}")
+            else:
+                self.logger.warning(f"Department ID não encontrado no meta para URL: {response.url}")
+                return
         
         # Verificar se o seletor CSS está encontrando elementos
         article_selector = search_terms.get('article', 'li.l-lista-noticias__item')
@@ -469,10 +714,12 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             if not hasattr(self, '_html_logged'):
                 self._html_logged = set()
             
-            if department_id not in self._html_logged:
+            # Usar uma chave única para logging (department_id ou URL)
+            log_key = department_id if department_id else response.url
+            if log_key not in self._html_logged:
                 html_sample = response.text[:2000] if len(response.text) > 2000 else response.text
                 self.logger.info(f"Trecho do HTML da página (primeiros 2000 chars) para debug:\n{html_sample}")
-                self._html_logged.add(department_id)
+                self._html_logged.add(log_key)
             
             # Tentar seletores alternativos mais abrangentes
             alt_selectors = [
