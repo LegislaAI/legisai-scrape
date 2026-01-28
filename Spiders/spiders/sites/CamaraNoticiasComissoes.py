@@ -44,6 +44,7 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
     article_count = 0
     found_old_articles = False
     MAX_ARTICLES_PER_COMMISSION = 50
+    MAX_TOTAL_ARTICLES = 10  # Limite global de notícias coletadas (para testes não durarem mais de 1 hora)
     old_articles_count = 0  # Contador de artigos antigos consecutivos
     MAX_OLD_ARTICLES_BEFORE_STOP = 10  # Parar após 10 artigos antigos consecutivos
     
@@ -868,8 +869,13 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         articles_in_timeframe = 0
         
         for article in articles_found:
+            # Verificar limite global primeiro
+            if self.article_count >= self.MAX_TOTAL_ARTICLES:
+                self.logger.info(f"Limite global de artigos atingido: {self.article_count}/{self.MAX_TOTAL_ARTICLES}")
+                return  # Parar completamente a coleta
+            # Verificar limite por comissão
             if self.article_count >= self.MAX_ARTICLES_PER_COMMISSION * len(self.processed_commissions):
-                self.logger.info(f"Limite de artigos atingido: {self.article_count}")
+                self.logger.info(f"Limite de artigos por comissão atingido: {self.article_count}")
                 break
             
             # Se o artigo já é um link (a tag), usar diretamente
@@ -1168,6 +1174,11 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             self.logger.error(f"Erro ao processar conteúdo: {e} - Artigo: {response.url}")
             content = ""
         
+        # Verificar limite global antes de processar
+        if self.article_count >= self.MAX_TOTAL_ARTICLES:
+            self.logger.info(f"Limite global de artigos atingido: {self.article_count}/{self.MAX_TOTAL_ARTICLES}. Parando coleta.")
+            return
+        
         # Verificar se o artigo está no período válido (90 dias)
         if search_limit <= updated <= today:
             # Resetar contador de artigos antigos quando encontrar um artigo válido
@@ -1183,7 +1194,7 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             yield item
             self.data.append(item)
             self.article_count += 1
-            self.logger.info(f"Artigo coletado com sucesso: {title[:50]}... (Data: {updated.strftime('%d/%m/%Y')}, Total: {self.article_count})")
+            self.logger.info(f"Artigo coletado com sucesso: {title[:50]}... (Data: {updated.strftime('%d/%m/%Y')}, Total: {self.article_count}/{self.MAX_TOTAL_ARTICLES})")
         else:
             if updated < search_limit:
                 self.old_articles_count += 1
