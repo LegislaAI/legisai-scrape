@@ -399,7 +399,12 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
         content_selector = search_terms.get('content', 'div.js-article-read-more')
         content = response.css(content_selector).getall()
         if not content:
-            content = response.css('article p').getall() or [""]
+            for alt in ['article p', 'main p', 'main article p', '[class*="artigo"] p', '[class*="conteudo"]', '.g-artigo p', 'main', 'article']:
+                content = response.css(alt).getall()
+                if content:
+                    break
+        if not content:
+            content = [""]
         try:
             content = BeautifulSoup(" ".join(content), "html.parser").text.replace("\n", " ").strip()
         except Exception:

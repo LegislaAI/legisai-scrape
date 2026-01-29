@@ -4,7 +4,7 @@
   "next_page": "",
   "updated": "p.g-artigo__data-hora::text",
   "title": "h1.g-artigo__titulo::text",
-  "content": "div.js-article-read-more",
+  "content": "main p, article p, div.js-article-read-more",
   "commission_news_link": "a[href*='/noticias']",
   "temporary_commission_list": "ul.l-lista-comissoes li a",
   "commission_name": "h1.g-artigo__titulo::text"

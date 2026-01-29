@@ -99,15 +99,6 @@ REQUEST_FINGERPRINTER_IMPLEMENTATION = "2.7"
 TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 FEED_EXPORT_ENCODING = "utf-8"
 
-SCRAPEOPS_API_KEY = '96ea5d0a-3f20-421d-bcc7-471ff05e9c75'
-# SCRAPEOPS_PROXY_ENABLED = True
-
-EXTENSIONS = {
-    'scrapeops_scrapy.extension.ScrapeOpsMonitor': 500, 
-    }
-
-DOWNLOADER_MIDDLEWARES = {
-    'scrapeops_scrapy.middleware.retry.RetryMiddleware': 550,
-    'scrapy.downloadermiddlewares.retry.RetryMiddleware': None,
-    # 'scrapeops_scrapy_proxy_sdk.scrapeops_scrapy_proxy_sdk.ScrapeOpsScrapyProxySdk': 725,
- }
+# Extensions and middlewares (ScrapeOps removido - não utilizado)
+EXTENSIONS = {}
+DOWNLOADER_MIDDLEWARES = {}

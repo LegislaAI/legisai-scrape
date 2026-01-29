@@ -558,17 +558,27 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         content = response.css(content_selector).getall()
         
         if not content:
-            # Tentar seletores alternativos para conteúdo
+            # Tentar seletores alternativos (estrutura do site da Câmara pode variar)
             alt_content_selectors = [
                 'div.js-article-read-more',
                 '.js-article-read-more',
                 'article p',
+                'main p',
+                'main article p',
+                '[class*="artigo"] p',
+                '[class*="conteudo"]',
+                '.g-artigo p',
                 '.conteudo',
                 '.artigo-conteudo',
+                'main div[class*="conteudo"]',
+                'main div[class*="artigo"]',
+                'article',
+                'main',
             ]
             for alt_selector in alt_content_selectors:
                 content = response.css(alt_selector).getall()
                 if content:
+                    self.logger.debug(f"Conteúdo encontrado com seletor alternativo: '{alt_selector}'")
                     break
         
         if not content:

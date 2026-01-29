@@ -53,8 +53,6 @@ requests-file==1.5.1
 requests-html==0.10.0
 requests-toolbelt==1.0.0
 s3transfer==0.7.0
-scrapeops-scrapy==0.5.3
-scrapeops-scrapy-proxy-sdk==1.0
 Scrapy==2.11.0
 selenium==4.15.2
 service-identity==23.1.0
