@@ -363,15 +363,31 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
         updated_selector = search_terms.get('updated', 'p.g-artigo__data-hora::text')
         updated = response.css(updated_selector).get()
         if not updated:
-            for alt in ['p.g-artigo__data-hora::text', '.g-artigo__data-hora::text', 'time::attr(datetime)', '.data::text']:
-                updated = response.css(alt).get()
-                if updated:
+            for alt in ['p.g-artigo__data-hora::text', '.g-artigo__data-hora::text', '[class*="data-hora"]::text', 'time::attr(datetime)', '.data::text']:
+                candidate = response.css(alt).get()
+                if candidate and (re.search(r'\d{2}/\d{2}/\d{4}', candidate) or re.search(r'\d{4}-\d{2}-\d{2}', candidate)):
+                    updated = candidate
                     break
+        if not updated and response.text:
+            date_match = re.search(r'\b(\d{2})/(\d{2})/(\d{4})\b', response.text)
+            if date_match:
+                updated = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+            if not updated:
+                iso_match = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', response.text)
+                if iso_match:
+                    updated = f"{iso_match.group(3)}-{iso_match.group(2)}-{iso_match.group(1)}"
         if not updated:
             return
         try:
-            updated = updated.strip().split(" ")[0].replace("/", "-")
-            updated = datetime.strptime(updated, "%d-%m-%Y")
+            updated = updated.strip()
+            first_part = updated.split(" ")[0].split("T")[0]
+            if '/' in first_part:
+                date_str = first_part.replace("/", "-")
+                updated = datetime.strptime(date_str, "%d-%m-%Y")
+            elif re.match(r'\d{4}-\d{2}-\d{2}', first_part):
+                updated = datetime.strptime(first_part[:10], "%Y-%m-%d")
+            else:
+                updated = datetime.strptime(first_part, "%d-%m-%Y")
         except (ValueError, Exception):
             return
         title_selector = search_terms.get('title', 'h1.g-artigo__titulo::text')

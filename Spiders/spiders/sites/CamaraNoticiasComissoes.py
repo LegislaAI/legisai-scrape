@@ -485,25 +485,47 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             alt_date_selectors = [
                 'p.g-artigo__data-hora::text',
                 '.g-artigo__data-hora::text',
+                '[class*="data-hora"]::text',
+                '[class*="data"]::text',
                 '.data-hora::text',
                 'time::attr(datetime)',
                 '.data::text',
+                'p::text',
             ]
             for alt_selector in alt_date_selectors:
-                updated = response.css(alt_selector).get()
-                if updated:
+                candidate = response.css(alt_selector).get()
+                if candidate and (re.search(r'\d{2}/\d{2}/\d{4}', candidate) or re.search(r'\d{4}-\d{2}-\d{2}', candidate)):
+                    updated = candidate
                     self.logger.debug(f"Data encontrada com seletor alternativo: '{alt_selector}'")
                     break
-            
+
+        # Fallback: buscar primeiro DD/MM/YYYY ou YYYY-MM-DD no HTML da página
+        if not updated and response.text:
+            date_match = re.search(r'\b(\d{2})/(\d{2})/(\d{4})\b', response.text)
+            if date_match:
+                updated = f"{date_match.group(1)}-{date_match.group(2)}-{date_match.group(3)}"
+                self.logger.debug(f"Data encontrada via regex no HTML (DD/MM/YYYY)")
             if not updated:
-                self.logger.warning(f"Data não encontrada no artigo: {response.url} (seletor usado: '{updated_selector}')")
-                return
-        
+                iso_match = re.search(r'\b(\d{4})-(\d{2})-(\d{2})\b', response.text)
+                if iso_match:
+                    updated = f"{iso_match.group(3)}-{iso_match.group(2)}-{iso_match.group(1)}"
+                    self.logger.debug(f"Data encontrada via regex no HTML (ISO)")
+
+        if not updated:
+            self.logger.warning(f"Data não encontrada no artigo: {response.url} (seletor usado: '{updated_selector}')")
+            return
+
         try:
             updated = updated.strip()
-            updated = updated.split(" ")[0]
-            updated = updated.replace("/", "-")
-            updated = datetime.strptime(updated, "%d-%m-%Y")
+            # Aceitar formato DD/MM/YYYY, DD-MM-YYYY ou YYYY-MM-DD (com ou sem hora)
+            first_part = updated.split(" ")[0].split("T")[0]
+            if '/' in first_part:
+                date_str = first_part.replace("/", "-")
+                updated = datetime.strptime(date_str, "%d-%m-%Y")
+            elif re.match(r'\d{4}-\d{2}-\d{2}', first_part):
+                updated = datetime.strptime(first_part[:10], "%Y-%m-%d")
+            else:
+                updated = datetime.strptime(first_part, "%d-%m-%Y")
             self.logger.debug(f"Data parseada: {updated}")
         except ValueError as e:
             self.logger.warning(f"Formato de data inválido: '{updated}' no artigo {response.url} - Erro: {e}")
