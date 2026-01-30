@@ -49,6 +49,8 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
     old_articles_count = 0
     MAX_OLD_ARTICLES_BEFORE_STOP = 10
     processed_commissions = set()
+    BATCH_SIZE = 100
+    batch_data = []
 
     def __init__(self, *args, **kwargs):
         super(CamaraNoticiasComissoesTemporariasSpider, self).__init__(*args, **kwargs)
@@ -292,6 +294,9 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
         )
 
     def parse_news_list(self, response):
+        if self.article_count >= self.MAX_TOTAL_ARTICLES:
+            self.crawler.engine.close_spider(self, "Limite global de artigos atingido.")
+            return
         department_id = response.meta.get('department_id')
         news_url = response.meta.get('news_url', response.url)
         commission_name = response.meta.get('commission_name', '')
@@ -416,10 +421,36 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
             item = articleItem(updated=updated, title=title, content=content, link=response.url, departmentId=department_id)
             yield item
             self.data.append(item)
+            self.batch_data.append(item)
             self.article_count += 1
+            if len(self.batch_data) >= self.BATCH_SIZE:
+                self._upload_batch()
+            if self.article_count >= self.MAX_TOTAL_ARTICLES:
+                self.crawler.engine.close_spider(self, "Limite global de artigos atingido.")
         else:
             if updated < search_limit:
                 self.old_articles_count += 1
+
+    def _upload_batch(self):
+        """Envia o batch atual para a API (evita payload único muito grande)."""
+        if not self.batch_data:
+            return
+        api_url = os.environ.get('API_URL')
+        if not api_url:
+            self.logger.error("API_URL não definido. Ignorando envio do batch.")
+            return
+        try:
+            data_dicts = [item.to_dict() for item in self.batch_data]
+            self.logger.info(f"Enviando batch de {len(data_dicts)} registros para {api_url}/news/scrape?type=PARLIAMENT")
+            response = requests.post(f"{api_url}/news/scrape?type=PARLIAMENT", json={"records": data_dicts})
+            if response.status_code >= 200 and response.status_code < 300:
+                self.logger.info(f"Batch enviado com sucesso: {len(data_dicts)} registros")
+            else:
+                self.logger.error(f"Falha no envio do batch: {response.status_code} - {response.text}")
+        except Exception as e:
+            self.logger.error(f"Erro ao enviar batch: {e}")
+        finally:
+            self.batch_data = []
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -428,6 +459,7 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
         return spider
 
     def upload_data(self, spider):
+        self._upload_batch()
         results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "Results")
         if not os.path.exists(results_dir):
             os.makedirs(results_dir)
@@ -440,16 +472,3 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
         file_data.extend([item.to_dict() for item in self.data])
         with open(file_path, "w", encoding='utf-8') as f:
             json.dump(file_data, f, ensure_ascii=False)
-        api_url = os.environ.get('API_URL')
-        if not api_url:
-            spider.logger.error("API_URL environment variable is not set. Skipping upload.")
-            return
-        try:
-            spider.logger.info(f"Uploading {len(file_data)} records to {api_url}/news/scrape?type=PARLIAMENT")
-            upload = requests.post(f"{api_url}/news/scrape?type=PARLIAMENT", json={"records": file_data})
-            if upload.status_code >= 200 and upload.status_code < 300:
-                print("upload success: ", upload.text)
-            else:
-                spider.logger.error(f"Upload failed: {upload.status_code} - {upload.text}")
-        except Exception as e:
-            spider.logger.error(f"Error during upload: {str(e)}")
