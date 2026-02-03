@@ -21,7 +21,7 @@ timestamp = datetime.timestamp(now)
 today = datetime.strptime(date.today().strftime("%d/%m/%Y"), "%d/%m/%Y")
 # Ampliar timerange para 90 dias (comissões não são tão frequentes)
 # Isso permite coletar notícias mais antigas que ainda são relevantes
-search_limit = datetime.strptime((date.today() - timedelta(days=90)).strftime("%d/%m/%Y"), "%d/%m/%Y")
+search_limit = datetime.strptime((date.today() - timedelta(days=1)).strftime("%d/%m/%Y"), "%d/%m/%Y")
 
 # Resolving relative path for CSS Selectors
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +45,7 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
     found_old_articles = False
     MAX_ARTICLES_PER_COMMISSION = 50
     # Limite global de notícias (aumentar para deploy oficial; 50 para testes)
-    MAX_TOTAL_ARTICLES = 50
+    MAX_TOTAL_ARTICLES = 1000
     old_articles_count = 0  # Contador de artigos antigos consecutivos
     MAX_OLD_ARTICLES_BEFORE_STOP = 10  # Parar após 10 artigos antigos consecutivos
     BATCH_SIZE = 100  # Envio em batch para a API (evita payload >5MB)
