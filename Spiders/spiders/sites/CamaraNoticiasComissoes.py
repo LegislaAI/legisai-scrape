@@ -18,10 +18,9 @@ locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
 now = datetime.now()
 timestamp = datetime.timestamp(now)
 
-today = datetime.strptime(date.today().strftime("%d/%m/%Y"), "%d/%m/%Y")
-# Ampliar timerange para 90 dias (comissões não são tão frequentes)
-# Isso permite coletar notícias mais antigas que ainda são relevantes
-search_limit = datetime.strptime((date.today() - timedelta(days=1)).strftime("%d/%m/%Y"), "%d/%m/%Y")
+# Janela padrão: hoje e até 90 dias atrás (comissões não são tão frequentes)
+_today = datetime.strptime(date.today().strftime("%d/%m/%Y"), "%d/%m/%Y")
+_default_search_limit = datetime.strptime((date.today() - timedelta(days=90)).strftime("%d/%m/%Y"), "%d/%m/%Y")
 
 # Resolving relative path for CSS Selectors
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -40,23 +39,55 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
     start_urls = []
     
     INCREMENT = 1
-    data = []
-    article_count = 0
     found_old_articles = False
     MAX_ARTICLES_PER_COMMISSION = 50
-    # Limite global de notícias (aumentar para deploy oficial; 50 para testes)
-    MAX_TOTAL_ARTICLES = 1000
-    old_articles_count = 0  # Contador de artigos antigos consecutivos
-    MAX_OLD_ARTICLES_BEFORE_STOP = 10  # Parar após 10 artigos antigos consecutivos
+    MAX_TOTAL_ARTICLES = 1000  # Teto de segurança na coleta diária
+    MAX_OLD_ARTICLES_BEFORE_STOP = 10  # Parar paginação após N artigos antigos consecutivos
     BATCH_SIZE = 100  # Envio em batch para a API (evita payload >5MB)
-    batch_data = []  # Buffer do batch atual
 
-    def __init__(self, department_ids=None, *args, **kwargs):
+    # Instância (definidos em __init__)
+    # search_limit, today, backfill_mode, articles_per_commission, batch_data, old_articles_count
+
+    def __init__(self, department_ids=None, start_date=None, end_date=None, backfill_mode=None, *args, **kwargs):
         super(CamaraNoticiasComissoesSpider, self).__init__(*args, **kwargs)
         self.department_ids = department_ids.split(',') if department_ids else None
         self.processed_commissions = set()
-        # Controle de URLs de paginação visitadas por comissão (evita loops)
-        self.visited_pagination_urls = {}  # Dict: commission_key -> set de URLs visitadas
+        self.visited_pagination_urls = {}
+        self.batch_data = []
+        self.data = []
+        self.article_count = 0
+        self.old_articles_count = 0
+        self.articles_per_commission = {}
+
+        # Backfill: -a start_date=01/01/2025 -a end_date=31/12/2025 -a backfill_mode=1
+        self.backfill_mode = str(backfill_mode or kwargs.get('backfill_mode') or '').lower() in ('1', 'true', 'yes')
+        start_date = start_date or kwargs.get('start_date')
+        end_date = end_date or kwargs.get('end_date')
+
+        def parse_date(s):
+            if not s:
+                return None
+            s = str(s).strip()[:10]
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(s, fmt)
+                except (ValueError, TypeError):
+                    continue
+            return None
+
+        if self.backfill_mode and start_date:
+            self.search_limit = parse_date(start_date) or _default_search_limit
+            self.today = parse_date(end_date) or _today
+            if self.today < self.search_limit:
+                self.today, self.search_limit = self.search_limit, self.today
+            self.effective_max_total = 100000
+            self.effective_max_old_before_stop = 999999
+            self.logger.info(f"Modo backfill: janela {self.search_limit.strftime('%d/%m/%Y')} a {self.today.strftime('%d/%m/%Y')}")
+        else:
+            self.search_limit = _default_search_limit
+            self.today = _today
+            self.effective_max_total = self.MAX_TOTAL_ARTICLES
+            self.effective_max_old_before_stop = self.MAX_OLD_ARTICLES_BEFORE_STOP
     
     def extract_b_start(self, url):
         """
@@ -159,7 +190,7 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         Parseia a lista de notícias de uma comissão
         Similar ao parse do scraper original, mas com departmentId
         """
-        if self.article_count >= self.MAX_TOTAL_ARTICLES:
+        if self.article_count >= self.effective_max_total:
             self.crawler.engine.close_spider(self, "Limite global de artigos atingido.")
             return
         department_id = response.meta.get('department_id')
@@ -261,14 +292,12 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
         articles_in_timeframe = 0
         
         for article in articles_found:
-            # Verificar limite global primeiro
-            if self.article_count >= self.MAX_TOTAL_ARTICLES:
-                self.logger.info(f"Limite global de artigos atingido: {self.article_count}/{self.MAX_TOTAL_ARTICLES}")
-                return  # Parar completamente a coleta
-            # Verificar limite por comissão
-            if self.article_count >= self.MAX_ARTICLES_PER_COMMISSION * len(self.processed_commissions):
-                self.logger.info(f"Limite de artigos por comissão atingido: {self.article_count}")
-                break
+            if self.article_count >= self.effective_max_total:
+                self.logger.info(f"Limite global de artigos atingido: {self.article_count}")
+                return
+            # Limite por comissão (em modo normal): não solicitar mais artigos desta comissão
+            if not self.backfill_mode and self.articles_per_commission.get(department_id, 0) >= self.MAX_ARTICLES_PER_COMMISSION:
+                continue
             
             # Se o artigo já é um link (a tag), usar diretamente
             if article_selector.startswith('a[') or article_selector == 'xpath_links':
@@ -598,16 +627,15 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             self.logger.error(f"Erro ao processar conteúdo: {e} - Artigo: {response.url}")
             content = ""
         
-        # Verificar limite global antes de processar
-        if self.article_count >= self.MAX_TOTAL_ARTICLES:
-            self.logger.info(f"Limite global de artigos atingido: {self.article_count}/{self.MAX_TOTAL_ARTICLES}. Parando coleta.")
+        if self.article_count >= self.effective_max_total:
+            self.logger.info(f"Limite global de artigos atingido: {self.article_count}. Parando coleta.")
             return
-        
-        # Verificar se o artigo está no período válido (90 dias)
-        if search_limit <= updated <= today:
-            # Resetar contador de artigos antigos quando encontrar um artigo válido
+
+        # Verificar se o artigo está na janela de datas (search_limit até today)
+        if self.search_limit <= updated <= self.today:
             self.old_articles_count = 0
-            
+            self.articles_per_commission[department_id] = self.articles_per_commission.get(department_id, 0) + 1
+
             item = articleItem(
                 updated=updated,
                 title=title,
@@ -621,17 +649,15 @@ class CamaraNoticiasComissoesSpider(scrapy.Spider):
             self.article_count += 1
             if len(self.batch_data) >= self.BATCH_SIZE:
                 self._upload_batch()
-            if self.article_count >= self.MAX_TOTAL_ARTICLES:
+            if self.article_count >= self.effective_max_total:
                 self.crawler.engine.close_spider(self, "Limite global de artigos atingido.")
-            self.logger.info(f"Artigo coletado com sucesso: {title[:50]}... (Data: {updated.strftime('%d/%m/%Y')}, Total: {self.article_count}/{self.MAX_TOTAL_ARTICLES})")
+            self.logger.info(f"Artigo coletado: {title[:50]}... (Data: {updated.strftime('%d/%m/%Y')}, Total: {self.article_count})")
         else:
-            if updated < search_limit:
+            if updated < self.search_limit:
                 self.old_articles_count += 1
-                self.logger.debug(f"Artigo muito antigo (data: {updated.strftime('%d/%m/%Y')}, limite: {search_limit.strftime('%d/%m/%Y')}): {response.url} (Antigos consecutivos: {self.old_articles_count})")
-                
-                # Parar apenas se encontrar muitos artigos antigos consecutivos
-                if self.old_articles_count >= self.MAX_OLD_ARTICLES_BEFORE_STOP:
-                    self.logger.info(f"Encontrados {self.old_articles_count} artigos antigos consecutivos. Parando coleta para esta comissão.")
+                self.logger.debug(f"Artigo fora da janela (data: {updated.strftime('%d/%m/%Y')}, janela: {self.search_limit.strftime('%d/%m/%Y')} a {self.today.strftime('%d/%m/%Y')}): {response.url} (antigos consecutivos: {self.old_articles_count})")
+                if self.old_articles_count >= self.effective_max_old_before_stop:
+                    self.logger.info(f"Encontrados {self.old_articles_count} artigos antigos consecutivos. Parando paginação desta comissão.")
                     self.found_old_articles = True
             else:
                 self.logger.debug(f"Artigo no futuro (data: {updated.strftime('%d/%m/%Y')}): {response.url}")
