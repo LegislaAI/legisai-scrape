@@ -45,7 +45,7 @@ class CamaraNoticiasComissoesTemporariasSpider(scrapy.Spider):
     found_old_articles = False
     MAX_ARTICLES_PER_COMMISSION = 50
     # Limite global de notícias (aumentar para deploy oficial; 50 para testes)
-    MAX_TOTAL_ARTICLES = 50
+    MAX_TOTAL_ARTICLES = 1000
     old_articles_count = 0
     MAX_OLD_ARTICLES_BEFORE_STOP = 10
     processed_commissions = set()
